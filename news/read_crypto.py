@@ -296,7 +296,7 @@ async def main():
             cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
             async for msg in tg.iter_messages(crypto_group, limit=3):
                 if msg.date and msg.date >= cutoff and msg.text and "CRYPTO DIGEST" in msg.text:
-                    print("Crypto digest already sent in last 10 minutes. Skipping.")
+                    print("Crypto digest already sent in last 5 minutes. Skipping.")
                     return
 
         start_utc, now_utc, label = get_time_window()
