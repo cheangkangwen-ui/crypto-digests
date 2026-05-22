@@ -181,23 +181,37 @@ TODAY'S DIGEST:
     pdf.cell(0, 8, label, new_x="LMARGIN", new_y="NEXT", align="C")
     pdf.ln(6)
 
+    def safe_cell(pdf, w, h, txt, font=None):
+        if font:
+            pdf.set_font(*font)
+        # Break long words that would overflow
+        max_chars = int(pdf.epw / (pdf.font_size * 0.5)) or 80
+        wrapped = []
+        for word in txt.split():
+            while len(word) > max_chars:
+                wrapped.append(word[:max_chars])
+                word = word[max_chars:]
+            wrapped.append(word)
+        txt = " ".join(wrapped)
+        try:
+            pdf.multi_cell(w, h, txt)
+        except Exception:
+            pdf.multi_cell(w, h, txt[:200] + "...")
+
     pdf.set_font("Helvetica", "", 9)
     for line in trade_text.split("\n"):
         clean = line.encode("latin-1", "replace").decode("latin-1")
         if line.startswith("TRADE ") and ":" in line:
             pdf.ln(4)
-            pdf.set_font("Helvetica", "B", 12)
-            pdf.multi_cell(0, 6, clean)
+            safe_cell(pdf, 0, 6, clean, ("Helvetica", "B", 12))
             pdf.set_font("Helvetica", "", 9)
         elif line.startswith("PORTFOLIO OVERVIEW"):
             pdf.ln(4)
-            pdf.set_font("Helvetica", "B", 12)
-            pdf.multi_cell(0, 6, clean)
+            safe_cell(pdf, 0, 6, clean, ("Helvetica", "B", 12))
             pdf.set_font("Helvetica", "", 9)
         elif line.endswith(":") and line.isupper():
             pdf.ln(2)
-            pdf.set_font("Helvetica", "B", 10)
-            pdf.multi_cell(0, 6, clean)
+            safe_cell(pdf, 0, 6, clean, ("Helvetica", "B", 10))
             pdf.set_font("Helvetica", "", 9)
         elif line.strip() == "---":
             pdf.ln(3)
@@ -205,7 +219,7 @@ TODAY'S DIGEST:
             pdf.line(pdf.get_x(), pdf.get_y(), pdf.get_x() + pdf.epw, pdf.get_y())
             pdf.ln(3)
         elif line.strip():
-            pdf.multi_cell(0, 5, clean)
+            safe_cell(pdf, 0, 5, clean)
         else:
             pdf.ln(3)
 
