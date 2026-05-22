@@ -14,10 +14,13 @@ from telethon.tl.functions.channels import CreateChannelRequest
 from datetime import datetime, timezone, timedelta
 from fpdf import FPDF
 
-TELEGRAM_API_ID = int(os.environ["TELEGRAM_API_ID"].strip().replace("﻿", ""))
-TELEGRAM_API_HASH = os.environ["TELEGRAM_API_HASH"].strip().replace("﻿", "")
-TELEGRAM_SESSION = os.environ.get("TELEGRAM_SESSION", "crypto_session").strip().replace("﻿", "")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+def _clean(val):
+    return val.strip().replace("﻿", "").replace("￾", "")
+
+TELEGRAM_API_ID = int(_clean(os.environ["TELEGRAM_API_ID"]))
+TELEGRAM_API_HASH = _clean(os.environ["TELEGRAM_API_HASH"])
+TELEGRAM_SESSION = _clean(os.environ.get("TELEGRAM_SESSION", "crypto_session"))
+ANTHROPIC_API_KEY = _clean(os.environ.get("ANTHROPIC_API_KEY", ""))
 CRYPTO_GROUP_NAME = os.environ.get("CRYPTO_GROUP_NAME", "🪙 Crypto Digest")
 TRADE_IDEAS_GROUP_NAME = os.environ.get("TRADE_IDEAS_GROUP_NAME", "📊 Crypto Trade Ideas")
 FOLDER_NAME = "Crypto"
