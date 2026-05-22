@@ -25,6 +25,7 @@ jobs:
       - name: Run digest
         env:
           GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SKIP_DUPLICATE_CHECK: ${{ github.event.inputs.skip_duplicate_check }}

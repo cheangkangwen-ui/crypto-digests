@@ -1,4 +1,3 @@
 openai
+anthropic
 requests
-fpdf2
-pandas
