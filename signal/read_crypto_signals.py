@@ -1,19 +1,22 @@
 """
-Crypto Signal Digest (Phase 2)
-==============================
+Crypto Signal Digest (Phase 2) — Playwright edition
+====================================================
 
-Architecture: Grok-as-fetcher + Claude-as-synthesizer
+Architecture: Playwright-as-fetcher + Claude-as-synthesizer
 
-  Stage 1 (Grok-4.3-fast + x_search): pure post extraction from 100 curated X
-          handles, batched at <=10 per call. Returns raw post lines.
+  Stage 1 (Playwright + chromium + X session cookies): scrape recent posts from
+          100 curated X handles. ~7 min/run.
   Stage 2 (Claude Opus 4.7): reasoning, sub-list grouping, 5-section digest.
   Stage 3 (Telegram bot API): chunked post + pin first message.
 
-Cost ~$3-4/run vs ~$13 if Grok did both stages.
+Free except Claude (~$0.30/run).
 """
 
+import asyncio
 import csv
+import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -21,14 +24,14 @@ from pathlib import Path
 
 import requests
 import anthropic
-from openai import OpenAI
+from playwright.async_api import async_playwright
 
 # ------- stdout encoding fix (Phase 1 lesson) -------
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
-# ------- BOM cleaner (Phase 1 lesson #1) -------
+# ------- BOM cleaner -------
 def _clean(val: str) -> str:
     if val is None:
         return ""
@@ -36,31 +39,31 @@ def _clean(val: str) -> str:
 
 
 # ------- Env vars -------
-GROK_API_KEY = _clean(os.environ.get("GROK_API_KEY", ""))
 ANTHROPIC_API_KEY = _clean(os.environ.get("ANTHROPIC_API_KEY", ""))
 TELEGRAM_BOT_TOKEN = _clean(os.environ.get("TELEGRAM_BOT_TOKEN", ""))
 TELEGRAM_CHAT_ID = _clean(os.environ.get("TELEGRAM_CHAT_ID", ""))
+X_COOKIES_JSON = os.environ.get("X_COOKIES_JSON", "").strip()  # raw JSON, keep newlines
 SKIP_DUPLICATE_CHECK = os.environ.get("SKIP_DUPLICATE_CHECK", "").strip() in ("1", "true", "True")
 
 for name, val in [
-    ("GROK_API_KEY", GROK_API_KEY),
     ("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY),
     ("TELEGRAM_BOT_TOKEN", TELEGRAM_BOT_TOKEN),
     ("TELEGRAM_CHAT_ID", TELEGRAM_CHAT_ID),
+    ("X_COOKIES_JSON", X_COOKIES_JSON),
 ]:
     if not val:
         sys.exit(f"ERROR: {name} env var missing")
 
 # ------- Constants -------
-GROK_BASE_URL = "https://api.x.ai/v1"
-GROK_MODEL = os.environ.get("GROK_MODEL", "grok-4.3-fast").strip() or "grok-4.3-fast"
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-opus-4-7").strip() or "claude-opus-4-7"
 HANDLES_CSV = Path(__file__).parent / "handles.csv"
-HANDLE_BATCH_SIZE = 10  # xAI x_search constraint: max 10 allowed_x_handles
 TG_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+MAX_POSTS_PER_HANDLE = 10  # cap to keep scrape time bounded
+SCRAPE_CONCURRENCY = 3  # parallel browser pages
+HANDLE_TIMEOUT_MS = 20_000
 
 
-# ------- Time window (Phase 1 pattern: clock-based 6-hour windows) -------
+# ------- Time window -------
 def time_window():
     schedule_hours = [1, 7, 13, 19]  # UTC = SGT 9am, 3pm, 9pm, 3am
     now = datetime.now(timezone.utc)
@@ -78,7 +81,6 @@ def time_window():
 
 # ------- Load handles -------
 def load_handles() -> list[tuple[str, str]]:
-    """Returns list of (handle, sub_list) preserving CSV order."""
     out = []
     with HANDLES_CSV.open(newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
@@ -88,88 +90,100 @@ def load_handles() -> list[tuple[str, str]]:
     return out
 
 
-def batch(lst, n):
-    for i in range(0, len(lst), n):
-        yield lst[i : i + n]
-
-
 # ============================================================
-# STAGE 1 — Grok fetches raw posts (no analysis)
+# STAGE 1 — Playwright scrapes X
 # ============================================================
-grok_client = OpenAI(api_key=GROK_API_KEY, base_url=GROK_BASE_URL)
-
-FETCH_PROMPT = """Use the x_search tool now to retrieve EVERY post from these {n} X handles between {from_dt} UTC and {to_dt} UTC.
-
-Handles: {handles}
-
-OUTPUT FORMAT — one line per post, no commentary, no analysis, no summarization:
-
-@handle | YYYY-MM-DD HH:MM | <full post text on one line, preserving links/tickers/mentions; truncate after 500 chars with ...>
-
-Rules:
-- One line per post. If a post wraps, fit it on one line (replace newlines with spaces).
-- Include the post URL at the end if available: ` [https://x.com/...]`
-- Skip pure retweets without comment. Include quote-tweets and replies if substantive.
-- If a handle posted nothing in the window, omit silently.
-- If NO posts at all across all handles, output exactly: "NO_POSTS_IN_WINDOW"
-
-Do NOT add headers, bullets, sections, or any text outside the per-post lines."""
-
-
-def grok_fetch_posts(handles_batch: list[str], from_dt: datetime, to_dt: datetime) -> str:
-    resp = grok_client.responses.create(
-        model=GROK_MODEL,
-        input=[
-            {
-                "role": "user",
-                "content": FETCH_PROMPT.format(
-                    n=len(handles_batch),
-                    handles=", ".join(f"@{h}" for h in handles_batch),
-                    from_dt=from_dt.isoformat(timespec="minutes"),
-                    to_dt=to_dt.isoformat(timespec="minutes"),
-                ),
-            }
-        ],
-        tools=[
-            {
-                "type": "x_search",
-                "allowed_x_handles": handles_batch,
-                "from_date": from_dt.strftime("%Y-%m-%d"),
-                "to_date": to_dt.strftime("%Y-%m-%d"),
-            }
-        ],
-    )
-    text = getattr(resp, "output_text", None)
-    if text:
-        return text
-    chunks = []
-    for item in getattr(resp, "output", []) or []:
-        if getattr(item, "type", None) != "message":
-            continue
-        for part in getattr(item, "content", []) or []:
-            t = getattr(part, "text", None)
-            if t:
-                chunks.append(t)
-    return "\n".join(chunks)
-
-
-def collect_all_posts(handles: list[tuple[str, str]], from_dt: datetime, to_dt: datetime) -> str:
-    """Run Grok x_search across all handles in batches of 10. Return concatenated post lines."""
-    all_lines = []
-    just_handles = [h for h, _ in handles]
-    batches = list(batch(just_handles, HANDLE_BATCH_SIZE))
-    for i, hb in enumerate(batches, 1):
+async def scrape_handle(context, handle: str, since_dt: datetime) -> list[dict]:
+    """Scrape recent posts for one handle, filter to since_dt. Returns list of post dicts."""
+    page = await context.new_page()
+    posts = []
+    try:
+        url = f"https://x.com/{handle}"
+        await page.goto(url, timeout=HANDLE_TIMEOUT_MS, wait_until="domcontentloaded")
+        # Wait for any tweet article to render
         try:
-            result = grok_fetch_posts(hb, from_dt, to_dt)
-            n_lines = sum(1 for ln in result.splitlines() if ln.strip().startswith("@"))
-            print(f"  [Grok batch {i}/{len(batches)}] {len(hb)} handles → {n_lines} post lines")
-            if "NO_POSTS_IN_WINDOW" not in result:
-                all_lines.append(result.strip())
-        except Exception as e:
-            print(f"  [Grok batch {i}/{len(batches)}] FAILED: {e}")
-            all_lines.append(f"# Batch {i} fetch error: {e}")
-        time.sleep(1)
-    return "\n".join(all_lines)
+            await page.wait_for_selector("article[data-testid='tweet']", timeout=8000)
+        except Exception:
+            # No tweets visible (private, suspended, or DOM changed)
+            return []
+
+        # Scroll a few times to load recent posts
+        for _ in range(3):
+            await page.mouse.wheel(0, 3000)
+            await asyncio.sleep(0.8)
+
+        # Extract tweets
+        articles = await page.query_selector_all("article[data-testid='tweet']")
+        for art in articles[:MAX_POSTS_PER_HANDLE]:
+            try:
+                # timestamp
+                time_el = await art.query_selector("time")
+                ts = await time_el.get_attribute("datetime") if time_el else None
+                if not ts:
+                    continue
+                post_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                if post_dt < since_dt:
+                    continue
+                # text
+                text_el = await art.query_selector("div[data-testid='tweetText']")
+                text = (await text_el.inner_text()).replace("\n", " ").strip() if text_el else ""
+                # link
+                link_el = await art.query_selector("a[href*='/status/']")
+                href = await link_el.get_attribute("href") if link_el else ""
+                url = f"https://x.com{href}" if href and href.startswith("/") else href
+                if text:
+                    posts.append(
+                        {
+                            "handle": handle,
+                            "timestamp": post_dt.isoformat(timespec="minutes"),
+                            "text": text[:600],
+                            "url": url,
+                        }
+                    )
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"  scrape error @{handle}: {type(e).__name__}: {str(e)[:120]}")
+    finally:
+        await page.close()
+    return posts
+
+
+async def scrape_all_handles(handles: list[tuple[str, str]], since_dt: datetime) -> list[dict]:
+    cookies = json.loads(X_COOKIES_JSON)
+    all_posts: list[dict] = []
+    sem = asyncio.Semaphore(SCRAPE_CONCURRENCY)
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+        )
+        context = await browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1280, "height": 900},
+            locale="en-US",
+        )
+        await context.add_cookies(cookies)
+
+        async def worker(handle: str, sub: str):
+            async with sem:
+                posts = await scrape_handle(context, handle, since_dt)
+                for p_ in posts:
+                    p_["sub_list"] = sub
+                if posts:
+                    print(f"  @{handle} [{sub}] → {len(posts)} posts")
+                return posts
+
+        results = await asyncio.gather(*(worker(h, s) for h, s in handles))
+        for r in results:
+            all_posts.extend(r)
+
+        await browser.close()
+    return all_posts
 
 
 # ============================================================
@@ -177,16 +191,12 @@ def collect_all_posts(handles: list[tuple[str, str]], from_dt: datetime, to_dt: 
 # ============================================================
 anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-SUB_LIST_ORDER = ["DeFi", "Trading", "Macro", "Other", "Infra/Builders"]
-
 SYNTHESIS_PROMPT = """You are synthesizing a Crypto Signal Digest from raw X posts pulled from 100 high-signal handles.
 
 Window: {label}
+Total posts in window: {n_posts}
 
-HANDLE → SUB-LIST MAPPING (for grouping):
-{handle_mapping}
-
-RAW POSTS (one per line, format: @handle | timestamp | text):
+RAW POSTS (JSON lines, one per post):
 ---
 {raw_posts}
 ---
@@ -219,31 +229,29 @@ Which themes are gaining traction (multi-handle convergence) vs fading (declinin
 
 End with:
 ---SOURCES---
-A numbered list of every handle you cited above, with a 1-line reason each.
+A numbered list of every handle you cited above, with a 1-line reason each. Include post URLs where available.
 
 READER PROFILE: experienced macro/equity fundamental investor (yield curves, P/E, DCF, credit spreads, options Greeks, duration) with NO crypto background. When introducing crypto-native jargon (funding rate, basis trade, LST, restaking, MEV, etc.), include a parenthetical TradFi analogy on first use — e.g. "funding rate (~ overnight repo rate for perpetual futures)".
 
 If raw posts are mostly empty or noise, say "Low signal in this window" instead of inventing content."""
 
 
-def synthesize_with_claude(raw_posts: str, label: str, handles: list[tuple[str, str]]) -> str:
-    handle_mapping = ", ".join(f"@{h}={sl}" for h, sl in handles)
-    prompt = SYNTHESIS_PROMPT.format(
-        label=label,
-        handle_mapping=handle_mapping,
-        raw_posts=raw_posts,
-    )
+def synthesize_with_claude(posts: list[dict], label: str) -> str:
+    if not posts:
+        return f"🪙 CRYPTO SIGNAL DIGEST — {label}\n\nLow signal in this window — no posts retrieved from the 100 tracked handles."
+
+    # Serialize posts as JSON lines, sorted by sub_list then handle
+    posts_sorted = sorted(posts, key=lambda x: (x.get("sub_list", ""), x["handle"]))
+    raw_posts = "\n".join(json.dumps(p, ensure_ascii=False) for p in posts_sorted)
+
+    prompt = SYNTHESIS_PROMPT.format(label=label, n_posts=len(posts), raw_posts=raw_posts)
     msg = anthropic_client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=6000,
-        thinking={"type": "enabled", "budget_tokens": 4000},
+        thinking={"type": "adaptive"},
         messages=[{"role": "user", "content": prompt}],
     )
-    # Extract text content from the response
-    text_parts = []
-    for block in msg.content:
-        if block.type == "text":
-            text_parts.append(block.text)
+    text_parts = [b.text for b in msg.content if b.type == "text"]
     return "\n".join(text_parts)
 
 
@@ -277,7 +285,7 @@ def tg_pin_message(message_id: int):
         print(f"WARN: pin failed: {r.text[:300]}")
 
 
-# ------- Duplicate guard (file-based, bots can't read history) -------
+# ------- Duplicate guard -------
 LAST_RUN_FILE = Path(__file__).parent / ".last_run_marker"
 
 
@@ -293,7 +301,7 @@ def mark_run_complete(window_label: str):
     LAST_RUN_FILE.write_text(window_label)
 
 
-# ------- Chunking for Telegram (Phase 1 lesson #7) -------
+# ------- Chunking -------
 def chunk_for_tg(text: str, max_chars: int = 4000) -> list[str]:
     if len(text) <= max_chars:
         return [text]
@@ -315,7 +323,7 @@ def chunk_for_tg(text: str, max_chars: int = 4000) -> list[str]:
 # ============================================================
 # MAIN
 # ============================================================
-def main():
+async def amain():
     from_dt, to_dt, label = time_window()
     print(f"Window: {label} ({from_dt.isoformat()} → {to_dt.isoformat()})")
 
@@ -324,18 +332,25 @@ def main():
         return
 
     handles = load_handles()
-    print(f"Loaded {len(handles)} handles")
+    print(f"Loaded {len(handles)} handles\n")
 
-    print("\n=== Stage 1: Grok fetches raw posts ===")
-    raw_posts = collect_all_posts(handles, from_dt, to_dt)
-    print(f"Total raw posts text: {len(raw_posts)} chars")
+    print("=== Stage 1: Playwright scrapes X ===")
+    t0 = time.time()
+    posts = await scrape_all_handles(handles, from_dt)
+    print(f"\nScraped {len(posts)} posts across {len(handles)} handles in {time.time() - t0:.1f}s")
 
-    if not raw_posts.strip() or len(raw_posts) < 100:
-        digest = f"🪙 CRYPTO SIGNAL DIGEST — {label}\n\nLow signal in this window — no posts retrieved from the 100 tracked handles."
-    else:
-        print("\n=== Stage 2: Claude synthesizes ===")
-        digest = synthesize_with_claude(raw_posts, label, handles)
-        print(f"Digest: {len(digest)} chars")
+    if len(posts) == 0:
+        # Heartbeat alert — session might be invalidated
+        try:
+            tg_send_message(
+                f"⚠️ Crypto Signal Digest — window {label}: scraped 0 posts. X session cookies may be invalid. Check X_COOKIES_JSON secret."
+            )
+        except Exception as e:
+            print(f"Failed to send health alert: {e}")
+
+    print("\n=== Stage 2: Claude synthesizes ===")
+    digest = synthesize_with_claude(posts, label)
+    print(f"Digest: {len(digest)} chars")
 
     print("\n=== Stage 3: post to Telegram ===")
     if "---SOURCES---" in digest:
@@ -358,6 +373,10 @@ def main():
 
     mark_run_complete(label)
     print(f"\nDone. Pinned message {first_msg_id}.")
+
+
+def main():
+    asyncio.run(amain())
 
 
 if __name__ == "__main__":
