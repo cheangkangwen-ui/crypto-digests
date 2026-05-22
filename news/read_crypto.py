@@ -78,8 +78,8 @@ TRADING_FRAMEWORK = """TRADE EXECUTION FRAMEWORK
 - Monitoring: What invalidates the thesis? When to cut?"""
 
 
-async def generate_trade_ideas_pdf(ai_client, digest_text, label):
-    trade_prompt = f"""You are a crypto trading analyst. Below is today's crypto digest and two analytical frameworks (Macro and Trading).
+async def generate_trade_ideas_pdf(ai_client, digest_text, sources_text, label):
+    trade_prompt = f"""You are a crypto trading analyst. Below is today's crypto digest, its sources, and two analytical frameworks (Macro and Trading).
 
 Your job: produce 3-5 ACTIONABLE trade ideas based on the digest news, structured using both frameworks.
 
@@ -125,10 +125,23 @@ End with a PORTFOLIO OVERVIEW section:
 - Correlation check across all ideas
 - Key macro risk to monitor
 
+After the PORTFOLIO OVERVIEW, output this EXACT line on its own:
+---SOURCES---
+
+Then list ALL sources used for each trade idea. For each source:
+- Cite the Telegram channel name from the digest sources below
+- For web searches you performed, include the full URL
+- Format each as a numbered item:
+1. [Topic/Ticker] — Source Name or URL
+2. ...
+
 Use the web_search tool to look up current prices, technicals, or on-chain data for any token you include. Every trade idea MUST have current price context.
 
 TODAY'S DIGEST:
-{digest_text}"""
+{digest_text}
+
+DIGEST SOURCES:
+{sources_text}"""
 
     def _call():
         messages = [{"role": "user", "content": trade_prompt}]
@@ -171,6 +184,14 @@ TODAY'S DIGEST:
     for line in trade_text.split("\n"):
         print(f"  {line}")
 
+    if "---SOURCES---" in trade_text:
+        trade_body, trade_sources = trade_text.split("---SOURCES---", 1)
+        trade_body = trade_body.strip()
+        trade_sources = trade_sources.strip()
+    else:
+        trade_body = trade_text
+        trade_sources = ""
+
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=20)
     pdf.add_page()
@@ -196,7 +217,7 @@ TODAY'S DIGEST:
                 pdf.ln(h)
 
     pdf.set_font("Helvetica", "", 9)
-    for line in trade_text.split("\n"):
+    for line in trade_body.split("\n"):
         clean = line.encode("latin-1", "replace").decode("latin-1")
         if line.startswith("TRADE ") and ":" in line:
             pdf.ln(4)
@@ -219,6 +240,19 @@ TODAY'S DIGEST:
             safe_cell(pdf, 5, clean)
         else:
             pdf.ln(3)
+
+    if trade_sources:
+        pdf.ln(6)
+        pdf.set_draw_color(180, 180, 180)
+        pdf.line(pdf.get_x(), pdf.get_y(), pdf.get_x() + pdf.epw, pdf.get_y())
+        pdf.ln(4)
+        safe_cell(pdf, 6, "SOURCES", ("Helvetica", "B", 12))
+        pdf.set_font("Helvetica", "", 8)
+        pdf.ln(2)
+        for line in trade_sources.split("\n"):
+            if line.strip():
+                clean = line.encode("latin-1", "replace").decode("latin-1")
+                safe_cell(pdf, 4, clean)
 
     myt = timezone(timedelta(hours=8))
     date_str = datetime.now(myt).strftime("%Y-%m-%d")
@@ -474,7 +508,7 @@ RAW MESSAGES:
             print(f"  Sent {len(chunks)} digest message(s)" + (" + 1 sources message." if sources else "."))
 
             print("\n  --- GENERATING TRADE IDEAS PDF ---\n")
-            pdf_path = await generate_trade_ideas_pdf(ai_client, body, label)
+            pdf_path = await generate_trade_ideas_pdf(ai_client, body, sources, label)
             if pdf_path:
                 trade_group = await get_or_create_group(tg, TRADE_IDEAS_GROUP_NAME, "Actionable crypto trade ideas")
                 sent_pdf = await tg.send_file(
