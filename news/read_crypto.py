@@ -1,6 +1,7 @@
 import os
 import sys
 import asyncio
+import tempfile
 import anthropic
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
@@ -11,6 +12,7 @@ from telethon.tl.types import Channel
 from telethon.tl.functions.messages import GetDialogFiltersRequest
 from telethon.tl.functions.channels import CreateChannelRequest
 from datetime import datetime, timezone, timedelta
+from fpdf import FPDF
 
 TELEGRAM_API_ID = int(os.environ["TELEGRAM_API_ID"])
 TELEGRAM_API_HASH = os.environ["TELEGRAM_API_HASH"]
@@ -49,6 +51,166 @@ def web_search(query: str, max_results: int = 6) -> str:
         )
     except Exception as e:
         return f"Search failed: {e}"
+
+
+MACRO_FRAMEWORK = """MACRO ANALYSIS FRAMEWORK
+- Narratives: What major narratives/themes are driving crypto? Sustainable? What's next?
+- Growth regime: Inflationary boom/bust vs disinflationary boom/bust — which quadrant are we in?
+- Monetary policy: Rate decisions, CB stance, liquidity conditions, M2 trends
+- Fiscal policy: Government spending, stablecoin regulation, crypto-specific legislation
+- Positioning & flows: On-chain flows, exchange inflows/outflows, stablecoin supply, funding rates
+- Sentiment: Fear & Greed index, social sentiment, are people fading or chasing?
+- Risk: What could go wrong? Why would someone sell this to you?
+- Catalyst: What will drive the next narrative shift?"""
+
+TRADING_FRAMEWORK = """TRADE EXECUTION FRAMEWORK
+- Technicals: Key support/resistance, RSI, 50/200d MA, trend structure
+- Sizing: 1-4% risk per trade, confidence-rated. Wide stops, not at obvious levels.
+- Entry structure: DCA below intrinsic value, or wait for confirmation?
+- Risk-reward: Asymmetric setups only. What's the 5:1 or better?
+- Correlations: Check correlation with BTC, ETH, and existing positions
+- Historical playbook: When did we last see this setup? What happened?
+- Signal grading: Low/medium/high grade signal — what data would upgrade it?
+- Monitoring: What invalidates the thesis? When to cut?"""
+
+
+async def generate_trade_ideas_pdf(ai_client, digest_text, label):
+    trade_prompt = f"""You are a crypto trading analyst. Below is today's crypto digest and two analytical frameworks (Macro and Trading).
+
+Your job: produce 3-5 ACTIONABLE trade ideas based on the digest news, structured using both frameworks.
+
+{MACRO_FRAMEWORK}
+
+{TRADING_FRAMEWORK}
+
+For each trade idea, use this structure:
+
+TRADE [N]: [Long/Short] $TICKER — [one-line thesis]
+
+MACRO CONTEXT:
+- Current regime and where this asset fits
+- Key macro tailwinds/headwinds
+- Positioning and flow context
+
+TECHNICAL SETUP:
+- Key levels (support, resistance, current price if known)
+- Trend structure and momentum
+- Entry zone and stop loss level
+
+TRADE PARAMETERS:
+- Direction: Long/Short
+- Conviction: [1-10]
+- Suggested risk: [1-4]% of portfolio
+- Entry: [price zone or condition]
+- Stop loss: [level or % from entry]
+- Target(s): [T1, T2 with rationale]
+- Risk/Reward: [ratio]
+- Timeframe: [days/weeks/months]
+
+WHY NOW:
+- What catalyst from today's news makes this actionable?
+- What's the historical playbook?
+
+WHAT INVALIDATES:
+- Specific conditions that kill the thesis
+
+---
+
+End with a PORTFOLIO OVERVIEW section:
+- Net positioning bias (long/short/neutral)
+- Correlation check across all ideas
+- Key macro risk to monitor
+
+Use the web_search tool to look up current prices, technicals, or on-chain data for any token you include. Every trade idea MUST have current price context.
+
+TODAY'S DIGEST:
+{digest_text}"""
+
+    def _call():
+        messages = [{"role": "user", "content": trade_prompt}]
+        while True:
+            response = ai_client.messages.create(
+                model="claude-opus-4-7",
+                max_tokens=8000,
+                thinking={"type": "adaptive"},
+                tools=[SEARCH_TOOL],
+                messages=messages,
+            )
+            if response.stop_reason != "tool_use":
+                return response
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    print(f"  [trade ideas search] {block.input['query']}")
+                    result = web_search(block.input["query"])
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result,
+                    })
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append({"role": "user", "content": tool_results})
+
+    print("  Generating actionable trade ideas...")
+    loop = asyncio.get_event_loop()
+    response = await loop.run_in_executor(None, _call)
+
+    trade_text = ""
+    for block in response.content:
+        if block.type == "text":
+            trade_text = block.text.strip()
+
+    if not trade_text:
+        print("  No trade ideas generated.")
+        return None
+
+    for line in trade_text.split("\n"):
+        print(f"  {line}")
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.add_page()
+
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.cell(0, 12, "CRYPTO TRADE IDEAS", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(0, 8, label, new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.ln(6)
+
+    pdf.set_font("Helvetica", "", 9)
+    for line in trade_text.split("\n"):
+        clean = line.encode("latin-1", "replace").decode("latin-1")
+        if line.startswith("TRADE ") and ":" in line:
+            pdf.ln(4)
+            pdf.set_font("Helvetica", "B", 12)
+            pdf.multi_cell(0, 6, clean)
+            pdf.set_font("Helvetica", "", 9)
+        elif line.startswith("PORTFOLIO OVERVIEW"):
+            pdf.ln(4)
+            pdf.set_font("Helvetica", "B", 12)
+            pdf.multi_cell(0, 6, clean)
+            pdf.set_font("Helvetica", "", 9)
+        elif line.endswith(":") and line.isupper():
+            pdf.ln(2)
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.multi_cell(0, 6, clean)
+            pdf.set_font("Helvetica", "", 9)
+        elif line.strip() == "---":
+            pdf.ln(3)
+            pdf.set_draw_color(180, 180, 180)
+            pdf.line(pdf.get_x(), pdf.get_y(), pdf.get_x() + pdf.epw, pdf.get_y())
+            pdf.ln(3)
+        elif line.strip():
+            pdf.multi_cell(0, 5, clean)
+        else:
+            pdf.ln(3)
+
+    myt = timezone(timedelta(hours=8))
+    date_str = datetime.now(myt).strftime("%Y-%m-%d")
+    pdf_path = os.path.join(tempfile.gettempdir(), f"crypto_trade_ideas_{date_str}.pdf")
+    pdf.output(pdf_path)
+    print(f"  PDF saved: {pdf_path}")
+    return pdf_path
 
 
 def get_time_window():
@@ -286,6 +448,20 @@ RAW MESSAGES:
             if first_msg:
                 await tg.pin_message(crypto_group, first_msg.id, notify=False)
             print(f"  Sent {len(chunks)} digest message(s)" + (" + 1 sources message." if sources else "."))
+
+            print("\n  --- GENERATING TRADE IDEAS PDF ---\n")
+            pdf_path = await generate_trade_ideas_pdf(ai_client, body, label)
+            if pdf_path:
+                await tg.send_file(
+                    crypto_group,
+                    pdf_path,
+                    caption="📊 Actionable Trade Ideas — see attached PDF",
+                )
+                print("  PDF sent to Telegram.")
+                try:
+                    os.remove(pdf_path)
+                except OSError:
+                    pass
 
         print(f"\n{'='*70}")
         print("  Done.")
