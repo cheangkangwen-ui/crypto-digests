@@ -125,18 +125,22 @@ End with a PORTFOLIO OVERVIEW section:
 - Correlation check across all ideas
 - Key macro risk to monitor
 
-After the PORTFOLIO OVERVIEW, add a section titled "TRADFI TRANSLATOR" that explains any crypto-specific concepts used in the trade ideas using TradFi analogies. The reader is an experienced macro and equity fundamental investor — they understand yield curves, P/E, DCF, central bank policy, credit spreads, options Greeks, duration, carry trades, etc. Map crypto concepts to these familiar frameworks. Format:
-- <Crypto Term> → <TradFi analogy in 1 sentence>
+After the PORTFOLIO OVERVIEW, add a section titled "TRADFI TRANSLATOR". The reader is an experienced macro and equity fundamental investor — they deeply understand yield curves, P/E, DCF, central bank policy, credit spreads, options Greeks, duration, carry trades, flow analysis, 13F filings, etc. They do NOT have crypto background.
 
-Examples:
-- Funding rate → cost of carry on a perp futures contract; positive = longs pay shorts, like negative roll yield
-- On-chain flows → equivalent to 13F/fund flow data but real-time and public on the blockchain
-- CEX vs DEX → centralized exchange (NYSE/CME) vs decentralized exchange (pure smart-contract order book, no operator)
-- Staking → locking tokens to validate the network, earning yield like a dividend or repo rate
-- TVL → AUM for a DeFi protocol
-- Perpetual futures → futures with no expiry, price anchored to spot via funding rate mechanism
-- Whale wallets → equivalent to tracking 13F institutional holders; large addresses that move markets
-Only include terms that actually appear in the trade ideas above. Keep it to 4-8 entries.
+For each crypto-specific concept used in the trade ideas above, write a THOROUGH explanation (3-5 sentences) that:
+1. First explains what it is in crypto — how it works mechanically
+2. Then maps it to the closest TradFi analogy so the reader can anchor it
+3. Then explains how it's relevant to the specific trade idea where it appeared
+
+Format each entry as:
+TERM: <name>
+<3-5 sentence explanation with TradFi mapping and relevance to the trade>
+
+Example of the depth expected:
+TERM: Funding Rate
+In crypto perpetual futures (futures that never expire), the funding rate is a periodic payment between longs and shorts that keeps the perp price anchored to spot. When funding is positive, longs pay shorts — meaning the market is net long and willing to pay for leverage. Think of it like the cost of carry on a futures contract, but settled every 8 hours instead of at expiry. As a signal, extreme positive funding is like seeing very high short interest costs in equities — it means crowded positioning and vulnerability to a squeeze or flush. In the trade above, elevated funding suggests the long side is crowded and a pullback entry may be available.
+
+Include 4-8 terms. Only include terms that actually appear in the trade ideas above. Skip terms the reader already knows (BTC, ETH, bull/bear, market cap, long/short).
 
 After the TRADFI TRANSLATOR, output this EXACT line on its own:
 ---SOURCES---
@@ -408,7 +412,7 @@ async def main():
 
 For each significant story, use the web_search tool to look up the token, protocol, or context if you are unsure about what it is or why it matters. Only search where context would meaningfully improve the explanation.
 
-IMPORTANT: Keep the entire digest CONCISE — aim for under 3500 characters total (excluding sources). Be dense and informative, not verbose.
+IMPORTANT: The digest section (stories + summary) should be concise — aim for under 3500 characters. But the Jargon Decoder section can be as long as needed to properly educate.
 
 Produce a digest in this exact format:
 
@@ -424,17 +428,25 @@ Categories (skip any with no stories): Layer 1s/Layer 2s | DeFi/DEXs | Memecoins
 SUMMARY: 2-3 sentences on key themes across all categories, written for a layman.
 
 JARGON DECODER:
-After the summary, add a short section titled "📖 JARGON DECODER" that lists 4-8 crypto-specific terms that appeared in this digest and explains each one using TradFi analogies. The reader has deep experience in macro and equity fundamental investing — they understand yield curves, P/E, DCF, central bank policy, credit spreads, options Greeks, etc. Map crypto concepts to these familiar frameworks. Format:
-- <Crypto Term> → <TradFi analogy or plain explanation in 1 sentence>
+After the summary, add a section titled "📖 JARGON DECODER". The reader is an experienced macro and equity fundamental investor — they deeply understand yield curves, P/E, DCF, central bank policy, credit spreads, options Greeks, duration, carry trades, flow analysis, 13F filings, etc. They do NOT have crypto background.
 
-Examples of the kind of mappings to make:
-- TVL (Total Value Locked) → AUM for a DeFi protocol — total capital deposited
-- Funding rate → like the cost of carry on a futures contract; positive = longs pay shorts
-- L1 vs L2 → L1 is the exchange (NYSE), L2 is an ECN routing orders back to it but cheaper/faster
-- DEX → an exchange with no central operator, like a pure limit order book run by smart contracts
-- Staking yield → similar to a dividend yield, paid for locking tokens to secure the network
-- Bridge exploit → like a custodian breach — the intermediary holding assets between two systems got hacked
-Only include terms that actually appear in TODAY's digest. Skip terms the reader likely already knows (BTC, ETH, bull/bear, market cap).
+For each crypto-specific term that appeared in this digest, write a THOROUGH explanation (3-5 sentences) that:
+1. First explains what it is in crypto — how it works mechanically
+2. Then maps it to the closest TradFi analogy so the reader can anchor it
+3. Then explains why it matters / how to think about it as an investor
+
+Format each entry as:
+📌 <TERM>
+<3-5 sentence explanation with TradFi mapping>
+
+Example of the depth expected:
+📌 Funding Rate
+In crypto perpetual futures (futures that never expire), the funding rate is a periodic payment between longs and shorts that keeps the perp price anchored to spot. When funding is positive, longs pay shorts — meaning the market is net long and willing to pay for leverage. Think of it like the cost of carry on a futures contract, but settled every 8 hours instead of at expiry. As a signal, extreme positive funding is like seeing very high short interest costs in equities — it means crowded positioning and vulnerability to a squeeze or flush. Traders watch funding as a real-time sentiment and positioning indicator, similar to how you'd watch put/call ratios or COT data.
+
+📌 Bridge Exploit
+A bridge is the infrastructure that lets you move tokens between two separate blockchains (e.g., Ethereum to Polygon). Think of it like a correspondent bank or clearinghouse — you deposit assets on one chain, the bridge locks them, and mints equivalent tokens on the other chain. A bridge exploit means an attacker found a vulnerability in this custodial intermediary and drained the locked funds — equivalent to a clearinghouse breach. These are among the highest-severity crypto incidents because bridges hold concentrated pools of assets, similar to how a CCP failure would ripple across markets.
+
+Include 4-8 terms. Only include terms that actually appear in TODAY's digest. Skip terms the reader likely already knows (BTC, ETH, bull/bear, market cap, wallet).
 
 Rules:
 - Merge duplicate stories across channels into one entry
@@ -464,7 +476,7 @@ RAW MESSAGES:
             while True:
                 response = ai_client.messages.create(
                     model="claude-opus-4-7",
-                    max_tokens=5000,
+                    max_tokens=6000,
                     thinking={"type": "adaptive"},
                     tools=[SEARCH_TOOL],
                     messages=messages,
