@@ -16,9 +16,10 @@ from fpdf import FPDF
 
 TELEGRAM_API_ID = int(os.environ["TELEGRAM_API_ID"])
 TELEGRAM_API_HASH = os.environ["TELEGRAM_API_HASH"]
-TELEGRAM_SESSION = os.environ.get("TELEGRAM_SESSION", "my_session")
+TELEGRAM_SESSION = os.environ.get("TELEGRAM_SESSION", "crypto_session")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 CRYPTO_GROUP_NAME = os.environ.get("CRYPTO_GROUP_NAME", "🪙 Crypto Digest")
+TRADE_IDEAS_GROUP_NAME = os.environ.get("TRADE_IDEAS_GROUP_NAME", "📊 Crypto Trade Ideas")
 FOLDER_NAME = "Crypto"
 
 TG_SEMAPHORE = 30
@@ -221,14 +222,14 @@ def get_time_window():
     return start.astimezone(timezone.utc), label
 
 
-async def get_or_create_group(tg):
+async def get_or_create_group(tg, name, about):
     dialogs = await tg.get_dialogs()
     for d in dialogs:
-        if d.name == CRYPTO_GROUP_NAME and getattr(d.entity, "megagroup", False):
+        if d.name == name and getattr(d.entity, "megagroup", False):
             return d.entity
     result = await tg(CreateChannelRequest(
-        title=CRYPTO_GROUP_NAME,
-        about="Automated crypto news digests",
+        title=name,
+        about=about,
         megagroup=True,
     ))
     return result.chats[0]
@@ -262,7 +263,7 @@ async def main():
         raise Exception("Not authorized.")
 
     try:
-        crypto_group = await get_or_create_group(tg)
+        crypto_group = await get_or_create_group(tg, CRYPTO_GROUP_NAME, "Automated crypto news digests")
 
         if not os.environ.get("SKIP_DUPLICATE_CHECK"):
             cutoff = datetime.now(timezone.utc) - timedelta(minutes=10)
@@ -452,12 +453,14 @@ RAW MESSAGES:
             print("\n  --- GENERATING TRADE IDEAS PDF ---\n")
             pdf_path = await generate_trade_ideas_pdf(ai_client, body, label)
             if pdf_path:
-                await tg.send_file(
-                    crypto_group,
+                trade_group = await get_or_create_group(tg, TRADE_IDEAS_GROUP_NAME, "Actionable crypto trade ideas")
+                sent_pdf = await tg.send_file(
+                    trade_group,
                     pdf_path,
                     caption="📊 Actionable Trade Ideas — see attached PDF",
                 )
-                print("  PDF sent to Telegram.")
+                await tg.pin_message(trade_group, sent_pdf.id, notify=False)
+                print(f"  PDF sent to '{TRADE_IDEAS_GROUP_NAME}' group.")
                 try:
                     os.remove(pdf_path)
                 except OSError:
