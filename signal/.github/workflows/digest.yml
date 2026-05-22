@@ -1,0 +1,32 @@
+name: Crypto Signal Digest
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_duplicate_check:
+        description: "Skip duplicate-window guard"
+        required: false
+        default: "false"
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install --no-cache-dir -r requirements.txt
+
+      - name: Run digest
+        env:
+          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SKIP_DUPLICATE_CHECK: ${{ github.event.inputs.skip_duplicate_check }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: python read_crypto_signals.py
