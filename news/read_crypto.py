@@ -125,7 +125,20 @@ End with a PORTFOLIO OVERVIEW section:
 - Correlation check across all ideas
 - Key macro risk to monitor
 
-After the PORTFOLIO OVERVIEW, output this EXACT line on its own:
+After the PORTFOLIO OVERVIEW, add a section titled "TRADFI TRANSLATOR" that explains any crypto-specific concepts used in the trade ideas using TradFi analogies. The reader is an experienced macro and equity fundamental investor — they understand yield curves, P/E, DCF, central bank policy, credit spreads, options Greeks, duration, carry trades, etc. Map crypto concepts to these familiar frameworks. Format:
+- <Crypto Term> → <TradFi analogy in 1 sentence>
+
+Examples:
+- Funding rate → cost of carry on a perp futures contract; positive = longs pay shorts, like negative roll yield
+- On-chain flows → equivalent to 13F/fund flow data but real-time and public on the blockchain
+- CEX vs DEX → centralized exchange (NYSE/CME) vs decentralized exchange (pure smart-contract order book, no operator)
+- Staking → locking tokens to validate the network, earning yield like a dividend or repo rate
+- TVL → AUM for a DeFi protocol
+- Perpetual futures → futures with no expiry, price anchored to spot via funding rate mechanism
+- Whale wallets → equivalent to tracking 13F institutional holders; large addresses that move markets
+Only include terms that actually appear in the trade ideas above. Keep it to 4-8 entries.
+
+After the TRADFI TRANSLATOR, output this EXACT line on its own:
 ---SOURCES---
 
 Then list ALL sources used for each trade idea. For each source:
@@ -223,7 +236,7 @@ DIGEST SOURCES:
             pdf.ln(4)
             safe_cell(pdf, 6, clean, ("Helvetica", "B", 12))
             pdf.set_font("Helvetica", "", 9)
-        elif line.startswith("PORTFOLIO OVERVIEW"):
+        elif line.startswith("PORTFOLIO OVERVIEW") or line.startswith("TRADFI TRANSLATOR"):
             pdf.ln(4)
             safe_cell(pdf, 6, clean, ("Helvetica", "B", 12))
             pdf.set_font("Helvetica", "", 9)
@@ -410,6 +423,19 @@ Categories (skip any with no stories): Layer 1s/Layer 2s | DeFi/DEXs | Memecoins
 
 SUMMARY: 2-3 sentences on key themes across all categories, written for a layman.
 
+JARGON DECODER:
+After the summary, add a short section titled "📖 JARGON DECODER" that lists 4-8 crypto-specific terms that appeared in this digest and explains each one using TradFi analogies. The reader has deep experience in macro and equity fundamental investing — they understand yield curves, P/E, DCF, central bank policy, credit spreads, options Greeks, etc. Map crypto concepts to these familiar frameworks. Format:
+- <Crypto Term> → <TradFi analogy or plain explanation in 1 sentence>
+
+Examples of the kind of mappings to make:
+- TVL (Total Value Locked) → AUM for a DeFi protocol — total capital deposited
+- Funding rate → like the cost of carry on a futures contract; positive = longs pay shorts
+- L1 vs L2 → L1 is the exchange (NYSE), L2 is an ECN routing orders back to it but cheaper/faster
+- DEX → an exchange with no central operator, like a pure limit order book run by smart contracts
+- Staking yield → similar to a dividend yield, paid for locking tokens to secure the network
+- Bridge exploit → like a custodian breach — the intermediary holding assets between two systems got hacked
+Only include terms that actually appear in TODAY's digest. Skip terms the reader likely already knows (BTC, ETH, bull/bear, market cap).
+
 Rules:
 - Merge duplicate stories across channels into one entry
 - Skip channels with no crypto-relevant content
@@ -419,7 +445,7 @@ Rules:
 - Use $ prefix for tickers (e.g. $BTC, $ETH, $SOL)
 - Include price moves when mentioned in the source messages
 
-After the digest, output this EXACT line on its own:
+After the digest (including the jargon decoder), output this EXACT line on its own:
 ---SOURCES---
 
 Then list source references as numbered items. For each token/claim, cite the Telegram channel name it came from. For web searches, include the URL. Format:
@@ -438,7 +464,7 @@ RAW MESSAGES:
             while True:
                 response = ai_client.messages.create(
                     model="claude-opus-4-7",
-                    max_tokens=4000,
+                    max_tokens=5000,
                     thinking={"type": "adaptive"},
                     tools=[SEARCH_TOOL],
                     messages=messages,
