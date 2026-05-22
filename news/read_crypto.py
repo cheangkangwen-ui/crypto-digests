@@ -215,11 +215,21 @@ TODAY'S DIGEST:
 
 
 def get_time_window():
+    """Clock-based window: runs at UTC 1,7,13,19 daily (6h windows).
+    Computes previous scheduled run time from the cron schedule."""
+    now_utc = datetime.now(timezone.utc)
     myt = timezone(timedelta(hours=8))
-    now = datetime.now(myt)
-    start = now - timedelta(hours=24)
-    label = f"Last 24h ({start.strftime('%Y-%m-%d %H:%M')} - {now.strftime('%H:%M')} MYT)"
-    return start.astimezone(timezone.utc), label
+    current_hour = now_utc.hour
+
+    schedule_hours = [1, 7, 13, 19]
+    prev_hours = [h for h in schedule_hours if h < current_hour]
+    if prev_hours:
+        prev_run_utc = now_utc.replace(hour=max(prev_hours), minute=0, second=0, microsecond=0)
+    else:
+        prev_run_utc = (now_utc - timedelta(days=1)).replace(hour=19, minute=0, second=0, microsecond=0)
+
+    label = f"{prev_run_utc.astimezone(myt).strftime('%H:%M')} - {now_utc.astimezone(myt).strftime('%H:%M')} MYT"
+    return prev_run_utc, now_utc, label
 
 
 async def get_or_create_group(tg, name, about):
@@ -266,14 +276,13 @@ async def main():
         crypto_group = await get_or_create_group(tg, CRYPTO_GROUP_NAME, "Automated crypto news digests")
 
         if not os.environ.get("SKIP_DUPLICATE_CHECK"):
-            cutoff = datetime.now(timezone.utc) - timedelta(minutes=10)
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
             async for msg in tg.iter_messages(crypto_group, limit=3):
                 if msg.date and msg.date >= cutoff and msg.text and "CRYPTO DIGEST" in msg.text:
                     print("Crypto digest already sent in last 10 minutes. Skipping.")
                     return
 
-        now_utc = datetime.now(timezone.utc)
-        start_utc, label = get_time_window()
+        start_utc, now_utc, label = get_time_window()
 
         print(f"\n{'='*70}")
         print(f"  CRYPTO NEWS ANALYSIS  |  Window: {label}")

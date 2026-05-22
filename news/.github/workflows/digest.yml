@@ -1,9 +1,7 @@
 name: Crypto News Digest
 
 on:
-  schedule:
-    - cron: '0 10 * * *'   # 6pm MYT daily
-  workflow_dispatch:
+  workflow_dispatch:  # Triggered by Cloudflare Worker crypto-digest-scheduler
 
 jobs:
   digest:
