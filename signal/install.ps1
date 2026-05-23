@@ -89,18 +89,20 @@ if (-not (Test-Path $CookiesFile)) {
 }
 Write-Host "    Found $CookiesFile"
 
-# --- Step 6: scheduled tasks (4x daily, UTC 1/7/13/19 = SGT 9am/3pm/9pm/3am)
+# --- Step 6: scheduled tasks (2x daily, SGT 8am + 8pm)
 Write-Host "[6/6] Registering Windows Scheduled Tasks..."
 
-# Convert UTC schedule hours to local time for Task Scheduler.
-# Task Scheduler uses LOCAL TIME. SGT is UTC+8, so UTC 1/7/13/19 = local 9/15/21/3.
-$LocalHours = @(9, 15, 21, 3)
-$TaskNames = @("CryptoSignalDigest-0900", "CryptoSignalDigest-1500", "CryptoSignalDigest-2100", "CryptoSignalDigest-0300")
+# Task Scheduler uses LOCAL TIME.
+$LocalHours = @(8, 20)
+$TaskNames = @("CryptoSignalDigest-0800", "CryptoSignalDigest-2000")
+
+# Also clean up any tasks from previous 4x-daily install.
+$LegacyTaskNames = @("CryptoSignalDigest-0900", "CryptoSignalDigest-1500", "CryptoSignalDigest-2100", "CryptoSignalDigest-0300")
 
 # Delete any existing tasks with these names (idempotent reinstall).
 # Suppress both stderr and PowerShell's error stream so missing tasks don't abort.
 $ErrorActionPreference = "Continue"
-foreach ($name in $TaskNames) {
+foreach ($name in ($TaskNames + $LegacyTaskNames)) {
     cmd /c "schtasks /Delete /TN $name /F >nul 2>&1"
 }
 $ErrorActionPreference = "Stop"
@@ -121,7 +123,14 @@ Write-Host ""
 Write-Host "==> Install complete."
 Write-Host ""
 Write-Host "Next steps:"
-Write-Host "  - Smoke test:  .\run.ps1"
+Write-Host "  - Manual run:  .\run.ps1     (or double-click run-manual.bat)"
 Write-Host "  - View logs:   Get-Content .\logs\*.log"
-Write-Host "  - List tasks:  schtasks /Query /TN CryptoSignalDigest-0900"
+Write-Host "  - List tasks:  schtasks /Query /TN CryptoSignalDigest-0800"
 Write-Host "  - Remove all:  .\uninstall.ps1"
+
+# --- Step 7: create one-click manual run shortcut
+$BatPath = Join-Path $ProjectDir "run-manual.bat"
+$BatContent = "@echo off`r`ncd /d `"%~dp0`"`r`npowershell.exe -ExecutionPolicy Bypass -NoExit -File `".\run.ps1`"`r`n"
+[System.IO.File]::WriteAllText($BatPath, $BatContent)
+Write-Host ""
+Write-Host "Created run-manual.bat - double-click it anytime for an instant digest."
