@@ -53,7 +53,6 @@ XAI_API_KEY = _clean(os.environ.get("XAI_API_KEY", ""))
 ANTHROPIC_API_KEY = _clean(os.environ.get("ANTHROPIC_API_KEY", ""))
 TELEGRAM_BOT_TOKEN = _clean(os.environ.get("TELEGRAM_BOT_TOKEN", ""))
 TELEGRAM_CHAT_ID = _clean(os.environ.get("TELEGRAM_CHAT_ID", ""))
-TRADE_IDEAS_CHAT_ID = _clean(os.environ.get("TRADE_IDEAS_CHAT_ID", ""))
 
 for name, val in [
     ("XAI_API_KEY", XAI_API_KEY),
@@ -63,9 +62,6 @@ for name, val in [
 ]:
     if not val:
         sys.exit(f"ERROR: {name} env var missing")
-
-if not TRADE_IDEAS_CHAT_ID:
-    print("WARN: TRADE_IDEAS_CHAT_ID not set — trade ideas PDF will be skipped")
 
 
 # ------- Config -------
@@ -87,6 +83,7 @@ def _load_framework(name: str) -> str:
 
 MACRO_FRAMEWORK = _load_framework("macro")
 TRADING_FRAMEWORK = _load_framework("trading")
+EQUITY_FRAMEWORK = _load_framework("equity")
 
 
 # ------- Web search tool (DuckDuckGo) for trade ideas -------
@@ -334,9 +331,10 @@ def fetch_via_grok(handles: list[tuple[str, str]], from_dt: datetime, to_dt: dat
 # ============================================================
 anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-SYNTHESIS_PROMPT = """You are synthesizing a Crypto Signal Digest from VERIFIED X posts.
+SYNTHESIS_PROMPT = """You are synthesizing a {category_title} Signal Digest from VERIFIED X posts.
 
 Window: {label}
+Category: {category_title} ({category_desc})
 Verified posts: {n_posts}
 
 VERIFIED POSTS (JSON array, each post has handle/sub_list/timestamp/text/url — ALL URLs have been HTTP-checked to resolve to real X status pages):
@@ -353,7 +351,7 @@ CRITICAL ANTI-HALLUCINATION RULES:
 
 Synthesize into this EXACT structure. Be concrete, cite handles, no fluff.
 
-🪙 CRYPTO SIGNAL DIGEST — {label}
+{header_emoji} {category_title_upper} SIGNAL DIGEST — {label}
 
 ## 1. TOP STORIES
 The 3-5 most-discussed narratives across all sub-lists. Each:
@@ -362,18 +360,15 @@ The 3-5 most-discussed narratives across all sub-lists. Each:
 - Cite handles (@x, @y, @z)
 
 ## 2. MARKET SNAPSHOT
-BTC / ETH / notable alts: price action observations from handles + dominant sentiment lean. Pull specific levels mentioned.
+{market_snapshot_guidance}
 
-## 3. TRADE IDEAS
-Specific actionable setups mentioned by handles. Each: $TICKER, direction (long/short), entry/target/stop where mentioned, conviction, source handle. If no concrete setups: "No concrete setups posted this window" — don't manufacture.
-
-## 4. NARRATIVE SUSTAINABILITY
+## 3. NARRATIVE SUSTAINABILITY
 Which themes are gaining traction (multi-handle convergence) vs fading (declining mentions, contradicting calls). Brief.
 
-## 5. BY SUB-LIST
+## 4. BY SUB-LIST
 For EACH sub_list that appears in the verified posts JSON below, write a bolded label followed by 1-2 most important signals from handles in that sub_list. Discover the sub_lists dynamically from the data — do NOT assume a fixed set. Skip any sub_list with zero verified posts (don't list it at all). Format: `- **<sub_list_name>:** <signals>`
 
-## 6. 📖 JARGON DECODER
+## 5. 📖 JARGON DECODER
 Pick 4-8 crypto-native terms that appeared in sections 1-5 above (e.g. funding rate, basis trade, LST, LRT, restaking, MEV, perp, AMM, TVL, OI, bridge exploit, ve-tokenomics, depeg, liquidation cascade, points farming, FDV vs market cap, sequencer, rollup, blob fees, ETF flows, basis spread). SKIP basics already-known: BTC, ETH, bull/bear, market cap, wallet, stablecoin.
 
 For each term, write a 3-5 sentence paragraph using this format:
@@ -393,24 +388,60 @@ End with:
 ---SOURCES---
 A numbered list. For EACH source: handle, 1-line reason cited, and the EXACT url from the verified posts array. Only include sources you actually drew from above. Do not add commentary URLs.
 
-READER PROFILE: experienced macro/equity fundamental investor (yield curves, P/E, DCF, credit spreads, options Greeks, duration, carry trades, 13F filings) with NO crypto background. When introducing crypto-native jargon in sections 1-5, use a parenthetical TradFi analogy on first mention — e.g. "funding rate (~ overnight repo rate for perpetual futures)". Then expand fully in the JARGON DECODER section.
+READER PROFILE: experienced macro/equity fundamental investor (yield curves, P/E, DCF, credit spreads, options Greeks, duration, carry trades, 13F filings) with NO crypto background. When introducing crypto-native jargon in sections 1-4, use a parenthetical TradFi analogy on first mention — e.g. "funding rate (~ overnight repo rate for perpetual futures)". Then expand fully in the JARGON DECODER section.
+
+## 6. TRADE IDEAS
+Specific actionable setups mentioned by handles in this category. Each: $TICKER, direction (long/short), entry/target/stop where mentioned, conviction level, source handle. If no concrete setups: "No concrete setups posted this window" — don't manufacture.
 
 If the raw output is mostly empty or noise, say "Low signal in this window" instead of inventing content. In that case, still produce a JARGON DECODER for 4-5 broadly important terms readers should know."""
 
 
-def synthesize(verified_posts: list[dict], label: str) -> str:
+# Crypto-themed keywords for auto-classifying sub_lists
+CRYPTO_KEYWORDS = ("crypto", "defi", "trading", "infra", "builder", "chain", "l1", "l2", "eth", "btc", "sol", "nft", "web3", "dex", "perp")
+
+def is_crypto_sublist(sub_list: str) -> bool:
+    s = sub_list.lower()
+    return any(k in s for k in CRYPTO_KEYWORDS)
+
+CATEGORY_CONFIG = {
+    "crypto": {
+        "title": "Crypto",
+        "title_upper": "CRYPTO",
+        "emoji": "🪙",
+        "desc": "DeFi, on-chain trading, infrastructure, L1/L2s",
+        "market_snapshot": "BTC / ETH / notable alts: price action observations from handles + dominant sentiment lean. Pull specific levels mentioned.",
+    },
+    "non-crypto": {
+        "title": "Macro & Markets",
+        "title_upper": "MACRO & MARKETS",
+        "emoji": "📈",
+        "desc": "TradFi macro, equities, rates, commodities, geopolitics",
+        "market_snapshot": "Key macro signals: equity indices, rates, DXY, commodities, credit. Pull specific levels and Fed/central bank commentary from handles.",
+    },
+}
+
+def synthesize(verified_posts: list[dict], label: str, category: str = "crypto") -> str:
+    cfg = CATEGORY_CONFIG[category]
     if not verified_posts:
         return (
-            f"🪙 CRYPTO SIGNAL DIGEST — {label}\n\n"
-            "Low signal in this window — zero verified posts retrieved. "
-            "This means either Grok's x_search returned nothing usable, or all candidates failed URL verification. "
+            f"{cfg['emoji']} {cfg['title_upper']} SIGNAL DIGEST — {label}\n\n"
+            "Low signal in this window — zero verified posts in this category. "
             "No digest content can be produced without verified sources."
         )
 
     raw = json.dumps(verified_posts, ensure_ascii=False, indent=2)
     sub_lists_present = sorted({p.get("sub_list", "Unknown") for p in verified_posts})
-    print(f"  Sub-lists in verified posts: {sub_lists_present}")
-    prompt = SYNTHESIS_PROMPT.format(label=label, n_posts=len(verified_posts), raw_posts=raw)
+    print(f"  [{category}] Sub-lists in verified posts: {sub_lists_present}")
+    prompt = SYNTHESIS_PROMPT.format(
+        label=label,
+        n_posts=len(verified_posts),
+        raw_posts=raw,
+        category_title=cfg["title"],
+        category_title_upper=cfg["title_upper"],
+        category_desc=cfg["desc"],
+        header_emoji=cfg["emoji"],
+        market_snapshot_guidance=cfg["market_snapshot"],
+    )
     msg = anthropic_client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=8000,
@@ -424,15 +455,15 @@ def synthesize(verified_posts: list[dict], label: str) -> str:
 # ============================================================
 # STAGE 2b — Trade ideas (Opus + frameworks + web search)
 # ============================================================
-TRADE_IDEAS_PROMPT = """You are a senior macro-crypto analyst producing actionable trade ideas.
+TRADE_IDEAS_PROMPT = """You are a senior {analyst_role} producing actionable trade ideas for {asset_class}.
 
 You have two analytical frameworks to apply:
 
 === MACRO FRAMEWORK ===
 {macro_framework}
 
-=== TRADING FRAMEWORK ===
-{trading_framework}
+=== {secondary_framework_label} ===
+{secondary_framework}
 
 === TODAY'S DIGEST ===
 {digest_text}
@@ -442,7 +473,7 @@ You have two analytical frameworks to apply:
 
 INSTRUCTIONS:
 
-Apply BOTH frameworks systematically to today's digest. Use the web_search tool to look up current prices, technicals (RSI, moving averages, support/resistance), on-chain data, funding rates, open interest, and any macro data points referenced in the frameworks.
+Apply BOTH frameworks systematically to today's digest. Use the web_search tool to look up current prices, technicals (RSI, moving averages, support/resistance), {asset_data_hints}, and any macro data points referenced in the frameworks.
 
 Produce 3-5 actionable trade ideas. For each trade:
 
@@ -451,8 +482,8 @@ TRADE [N]: [Long/Short] $TICKER — [one-line thesis]
 MACRO CONTEXT
 Apply the Macro Framework: What regime are we in (inflation vs growth quadrant)? What narratives are driving this? What does positioning/sentiment look like? What are the risks — why would someone sell this to you?
 
-TECHNICAL SETUP
-Apply the Trading Framework: What do longer time-frame S/R and trend lines show? RSI, 14/50/200d MA levels. What caused previous volatility at these levels? What is a similar period in history and what happened?
+TECHNICAL/FUNDAMENTAL SETUP
+Apply the {secondary_framework_label}: {secondary_application_hint}
 
 TRADE PARAMETERS
 - Direction: Long / Short
@@ -475,28 +506,79 @@ After all trades, include:
 PORTFOLIO OVERVIEW
 How do these trades correlate? Are there spreads that hedge systemic risk? What is the aggregate risk exposure? Apply the "check for correlations between existing positions" guidance from the Trading Framework.
 
-TRADFI TRANSLATOR
-Pick 4-8 crypto-native terms from the trade ideas above. For each:
+LAYMAN EXPLANATION
+Pick 4-8 jargon terms from the trade ideas above that an experienced macro/equity investor with NO {jargon_decoder_target} background might not immediately grasp. For each:
 
 TERM: <name>
-[3-5 sentences: (1) what it is mechanically in crypto, (2) closest TradFi analogy with specific instrument, (3) why it matters specifically to the trades above]
+[3-5 sentences: (1) what it is mechanically, (2) closest analogy from the reader's domain ({reader_familiar_domain}), (3) why it matters specifically to the trades above]
 
 Quality bar example:
-TERM: Funding Rate
-In perpetual futures (crypto's main derivative — contracts with no expiry), longs pay shorts (or vice versa) every 8 hours based on the gap between perp price and spot. Closest TradFi analogy: the overnight repo rate or the carry cost of holding a futures position into delivery — it's the price of leverage. When funding spikes positive, traders are paying steep premiums to stay long, often a contrarian top signal; deeply negative funding can flag capitulation. For Trade [N], the current funding rate of X% signals Y.
+{jargon_example}
 
 ---SOURCES---
 Numbered list. Each source: description, full URL from web searches or Telegram channel name from the digest."""
 
 
-def generate_trade_ideas(digest_text: str, digest_sources: str) -> str:
-    if not MACRO_FRAMEWORK or not TRADING_FRAMEWORK:
-        print("  Skipping trade ideas: frameworks not loaded")
+TRADE_IDEAS_CATEGORY_CONFIG = {
+    "crypto": {
+        "analyst_role": "macro-crypto analyst",
+        "asset_class": "crypto assets (BTC, ETH, alts, perpetual futures, on-chain plays)",
+        "secondary_framework_label": "CRYPTO TRADING FRAMEWORK",
+        "secondary_framework": TRADING_FRAMEWORK,
+        "secondary_application_hint": "What do longer time-frame S/R and trend lines show? RSI, 14/50/200d MA levels. What caused previous volatility at these levels? What is a similar period in history and what happened?",
+        "asset_data_hints": "on-chain data, funding rates, open interest, ETF flows",
+        "jargon_decoder_target": "crypto",
+        "reader_familiar_domain": "TradFi — yield curves, P/E, DCF, credit spreads, options Greeks, duration, carry trades, 13F filings",
+        "jargon_example": (
+            "TERM: Funding Rate\n"
+            "In perpetual futures (crypto's main derivative — contracts with no expiry), longs pay shorts "
+            "(or vice versa) every 8 hours based on the gap between perp price and spot. "
+            "Closest TradFi analogy: the overnight repo rate or the carry cost of holding a futures position into delivery — it's the price of leverage. "
+            "When funding spikes positive, traders are paying steep premiums to stay long, often a contrarian top signal; "
+            "deeply negative funding can flag capitulation. For Trade [N], the current funding rate of X% signals Y."
+        ),
+    },
+    "non-crypto": {
+        "analyst_role": "macro/equity analyst",
+        "asset_class": "TradFi assets (equities, equity indexes, rates, FX, commodities, credit)",
+        "secondary_framework_label": "EQUITY/COMPANY FRAMEWORK",
+        "secondary_framework": EQUITY_FRAMEWORK,
+        "secondary_application_hint": "Apply the relevant section of the Equity Framework: for single names, do the business model + financials + valuation analysis; for indexes/rates/FX/commodities, apply the macro framework's asset-class-specific sub-section. Always include technicals (S/R, RSI, 14/50/200d MA) and a historical analogue.",
+        "asset_data_hints": "COT positioning, ETF flows, options skew, earnings revisions, central bank commentary",
+        "jargon_decoder_target": "deep TradFi micro",
+        "reader_familiar_domain": "the reader's existing toolkit — keep this section brief if all terms are standard",
+        "jargon_example": (
+            "TERM: 2s10s Curve\n"
+            "The spread between 2-year and 10-year Treasury yields. Inversion (2Y > 10Y) has historically preceded "
+            "every US recession by 6-18 months. Mechanically: short rates are anchored by Fed policy expectations "
+            "while long rates reflect growth + inflation expectations + term premium. A flattening/inverting curve "
+            "signals the market expects the Fed to cut. For Trade [N], the current 2s10s level of X bps signals Y."
+        ),
+    },
+}
+
+
+def generate_trade_ideas(digest_text: str, digest_sources: str, category: str = "crypto") -> str:
+    if not MACRO_FRAMEWORK:
+        print("  Skipping trade ideas: macro framework not loaded")
+        return ""
+
+    cfg = TRADE_IDEAS_CATEGORY_CONFIG[category]
+    if not cfg["secondary_framework"]:
+        print(f"  Skipping {category} trade ideas: {cfg['secondary_framework_label']} not loaded")
         return ""
 
     prompt = TRADE_IDEAS_PROMPT.format(
         macro_framework=MACRO_FRAMEWORK,
-        trading_framework=TRADING_FRAMEWORK,
+        analyst_role=cfg["analyst_role"],
+        asset_class=cfg["asset_class"],
+        secondary_framework_label=cfg["secondary_framework_label"],
+        secondary_framework=cfg["secondary_framework"],
+        secondary_application_hint=cfg["secondary_application_hint"],
+        asset_data_hints=cfg["asset_data_hints"],
+        jargon_decoder_target=cfg["jargon_decoder_target"],
+        reader_familiar_domain=cfg["reader_familiar_domain"],
+        jargon_example=cfg["jargon_example"],
         digest_text=digest_text,
         digest_sources=digest_sources,
     )
@@ -731,68 +813,78 @@ def main():
         print("Aborting: nothing verified. Health alert sent.")
         return
 
-    print("\n=== Stage 2: Claude synthesizes (verified posts only) ===")
-    t1 = time.time()
-    digest = synthesize(verified, label)
-    print(f"Stage 2 done in {time.time() - t1:.1f}s, digest = {len(digest)} chars\n")
+    # Split verified posts into crypto / non-crypto buckets
+    crypto_posts = [p for p in verified if is_crypto_sublist(p.get("sub_list", ""))]
+    non_crypto_posts = [p for p in verified if not is_crypto_sublist(p.get("sub_list", ""))]
+    print(f"\nBucket split: crypto={len(crypto_posts)}, non-crypto={len(non_crypto_posts)}")
 
-    print("=== Stage 3: Telegram (digest) ===")
-    if "---SOURCES---" in digest:
-        body, sources = digest.split("---SOURCES---", 1)
-    else:
-        body, sources = digest, ""
+    pin_first = True  # only pin the very first digest message of the run
 
-    first_msg_id = None
-    for chunk in chunk_for_tg(body.strip()):
-        resp = tg_send_message(chunk)
-        if first_msg_id is None:
-            first_msg_id = resp["result"]["message_id"]
-        time.sleep(0.5)
+    for category, bucket in [("crypto", crypto_posts), ("non-crypto", non_crypto_posts)]:
+        if not bucket:
+            print(f"\n--- Skipping {category}: 0 verified posts in bucket ---")
+            continue
 
-    if sources.strip():
-        tg_send_message("🔗 SOURCES\n" + sources.strip(), disable_notification=True)
+        cfg = CATEGORY_CONFIG[category]
+        header_emoji = cfg["emoji"]
+        title_upper = cfg["title_upper"]
 
+        print(f"\n=== Stage 2 [{category}]: Claude synthesizes ===")
+        t1 = time.time()
+        digest = synthesize(bucket, label, category=category)
+        print(f"  done in {time.time() - t1:.1f}s, digest = {len(digest)} chars")
+
+        if "---SOURCES---" in digest:
+            body, sources = digest.split("---SOURCES---", 1)
+        else:
+            body, sources = digest, ""
+
+        print(f"=== Stage 3 [{category}]: Telegram digest ===")
+        first_msg_id = None
+        for chunk in chunk_for_tg(body.strip()):
+            resp = tg_send_message(chunk)
+            if first_msg_id is None:
+                first_msg_id = resp["result"]["message_id"]
+            time.sleep(0.5)
+
+        if sources.strip():
+            tg_send_message(f"🔗 {title_upper} SOURCES\n" + sources.strip(), disable_notification=True)
+
+        if pin_first and first_msg_id:
+            tg_pin_message(first_msg_id)
+            print(f"  Pinned digest message {first_msg_id}")
+            pin_first = False
+
+        # ---- Stage 2b: Trade ideas PDF for this category ----
+        print(f"\n=== Stage 2b [{category}]: Trade Ideas (Opus + frameworks + web search) ===")
+        t2 = time.time()
+        trade_text = generate_trade_ideas(body, sources, category=category)
+        print(f"  done in {time.time() - t2:.1f}s, text = {len(trade_text)} chars")
+
+        if not trade_text.strip():
+            print(f"  No trade ideas generated for {category} — skipping PDF")
+            continue
+
+        print(f"=== Stage 3b [{category}]: Telegram PDF ===")
+        pdf_path = render_trade_ideas_pdf(trade_text)
+        print(f"  PDF rendered: {pdf_path}")
+        try:
+            caption = f"{header_emoji} {cfg['title']} Trade Ideas — {label}"
+            resp = tg_send_file(pdf_path, caption=caption)
+            pdf_msg_id = resp["result"]["message_id"]
+            print(f"  PDF posted: message {pdf_msg_id}")
+        finally:
+            try:
+                os.unlink(pdf_path)
+            except OSError:
+                pass
+
+    # Final verification footer (once per run)
     footer = (
         f"✅ {len(verified)} posts verified (HTTP-checked URLs, handle-matched). "
         f"{len(rejected)} candidates rejected."
     )
     tg_send_message(footer, disable_notification=True)
-
-    if first_msg_id:
-        tg_pin_message(first_msg_id)
-
-    print(f"  Digest pinned: message {first_msg_id}")
-
-    # ---- Stage 2b: Trade ideas ----
-    if not TRADE_IDEAS_CHAT_ID:
-        print("\n  Skipping trade ideas: TRADE_IDEAS_CHAT_ID not set")
-    else:
-        print("\n=== Stage 2b: Trade Ideas (Opus + frameworks + web search) ===")
-        t2 = time.time()
-        trade_text = generate_trade_ideas(body, sources)
-        print(f"  Stage 2b done in {time.time() - t2:.1f}s, text = {len(trade_text)} chars")
-
-        if trade_text.strip():
-            print("\n=== Stage 3b: Telegram (trade ideas PDF) ===")
-            pdf_path = render_trade_ideas_pdf(trade_text)
-            print(f"  PDF rendered: {pdf_path}")
-
-            try:
-                resp = tg_send_file(
-                    pdf_path,
-                    chat_id=TRADE_IDEAS_CHAT_ID,
-                    caption="📊 Crypto Trade Ideas",
-                )
-                pdf_msg_id = resp["result"]["message_id"]
-                tg_pin_message(pdf_msg_id, chat_id=TRADE_IDEAS_CHAT_ID)
-                print(f"  Trade ideas PDF pinned: message {pdf_msg_id}")
-            finally:
-                try:
-                    os.unlink(pdf_path)
-                except OSError:
-                    pass
-        else:
-            print("  No trade ideas generated — skipping PDF")
 
     print("\nDone.")
 
