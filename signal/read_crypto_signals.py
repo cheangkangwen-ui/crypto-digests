@@ -93,7 +93,7 @@ def load_handles() -> list[tuple[str, str]]:
 # ============================================================
 # STAGE 1 — Playwright scrapes X
 # ============================================================
-async def scrape_handle(context, handle: str, since_dt: datetime) -> list[dict]:
+async def scrape_handle(context, handle: str, since_dt: datetime, debug: bool = False) -> list[dict]:
     """Scrape recent posts for one handle, filter to since_dt. Returns list of post dicts."""
     page = await context.new_page()
     posts = []
@@ -103,8 +103,13 @@ async def scrape_handle(context, handle: str, since_dt: datetime) -> list[dict]:
         # Wait for any tweet article to render
         try:
             await page.wait_for_selector("article[data-testid='tweet']", timeout=8000)
-        except Exception:
-            # No tweets visible (private, suspended, or DOM changed)
+        except Exception as e:
+            if debug:
+                title = await page.title()
+                final_url = page.url
+                body_text = await page.evaluate("() => document.body.innerText.slice(0, 600)")
+                print(f"  DEBUG @{handle}: no tweet selector. title={title!r} url={final_url!r}")
+                print(f"  DEBUG body preview: {body_text!r}")
             return []
 
         # Scroll a few times to load recent posts
@@ -169,16 +174,18 @@ async def scrape_all_handles(handles: list[tuple[str, str]], since_dt: datetime)
         )
         await context.add_cookies(cookies)
 
-        async def worker(handle: str, sub: str):
+        # First handle: turn on debug to see what X is serving us
+        async def worker(handle: str, sub: str, debug: bool = False):
             async with sem:
-                posts = await scrape_handle(context, handle, since_dt)
+                posts = await scrape_handle(context, handle, since_dt, debug=debug)
                 for p_ in posts:
                     p_["sub_list"] = sub
                 if posts:
                     print(f"  @{handle} [{sub}] → {len(posts)} posts")
                 return posts
 
-        results = await asyncio.gather(*(worker(h, s) for h, s in handles))
+        # Debug first 3 handles for visibility on auth/anti-bot state
+        results = await asyncio.gather(*(worker(h, s, debug=(i < 3)) for i, (h, s) in enumerate(handles)))
         for r in results:
             all_posts.extend(r)
 
@@ -332,6 +339,10 @@ async def amain():
         return
 
     handles = load_handles()
+    debug_limit = os.environ.get("DEBUG_HANDLE_LIMIT", "").strip()
+    if debug_limit.isdigit():
+        handles = handles[: int(debug_limit)]
+        print(f"DEBUG_HANDLE_LIMIT={debug_limit} — only scraping first {len(handles)} handles")
     print(f"Loaded {len(handles)} handles\n")
 
     print("=== Stage 1: Playwright scrapes X ===")

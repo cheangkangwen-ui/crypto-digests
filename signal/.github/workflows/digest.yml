@@ -7,6 +7,10 @@ on:
         description: "Skip duplicate-window guard"
         required: false
         default: "false"
+      debug_handle_limit:
+        description: "Only scrape first N handles (for debugging)"
+        required: false
+        default: ""
 
 jobs:
   digest:
@@ -32,5 +36,6 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           X_COOKIES_JSON: ${{ secrets.X_COOKIES_JSON }}
           SKIP_DUPLICATE_CHECK: ${{ github.event.inputs.skip_duplicate_check }}
+          DEBUG_HANDLE_LIMIT: ${{ github.event.inputs.debug_handle_limit }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: python read_crypto_signals.py
