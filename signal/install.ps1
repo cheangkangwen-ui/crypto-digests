@@ -103,35 +103,78 @@ if (-not (Test-Path $CookiesFile)) {
 }
 Write-Host "    Found $CookiesFile"
 
-# --- Step 6: scheduled tasks (2x daily, SGT 8am + 8pm)
-Write-Host "[6/6] Registering Windows Scheduled Tasks..."
+# --- Step 6: scheduled task — fires when you log in
+Write-Host "[6/6] Registering Windows Scheduled Task (on login)..."
 
-# Task Scheduler uses LOCAL TIME.
-$LocalHours = @(8, 20)
-$TaskNames = @("CryptoSignalDigest-0800", "CryptoSignalDigest-2000")
+$TaskName = "CryptoSignalDigest-OnLogin"
 
-# Also clean up any tasks from previous 4x-daily install.
-$LegacyTaskNames = @("CryptoSignalDigest-0900", "CryptoSignalDigest-1500", "CryptoSignalDigest-2100", "CryptoSignalDigest-0300")
-
-# Delete any existing tasks with these names (idempotent reinstall).
-# Suppress both stderr and PowerShell's error stream so missing tasks don't abort.
+# Clean up any tasks from previous installs (time-based, legacy 4x-daily)
+$LegacyTaskNames = @(
+    "CryptoSignalDigest-0800", "CryptoSignalDigest-2000",
+    "CryptoSignalDigest-0900", "CryptoSignalDigest-1500", "CryptoSignalDigest-2100", "CryptoSignalDigest-0300"
+)
 $ErrorActionPreference = "Continue"
-foreach ($name in ($TaskNames + $LegacyTaskNames)) {
+foreach ($name in (@($TaskName) + $LegacyTaskNames)) {
     cmd /c "schtasks /Delete /TN $name /F >nul 2>&1"
 }
 $ErrorActionPreference = "Stop"
 
-for ($i = 0; $i -lt $LocalHours.Length; $i++) {
-    $hour = $LocalHours[$i]
-    $name = $TaskNames[$i]
-    $timeStr = "{0:D2}:00" -f $hour
-    Write-Host "    Creating task $name at $timeStr local..."
-    & schtasks /Create /TN $name /TR "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$RunScript`"" /SC DAILY /ST $timeStr /F | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Failed to create task $name (exit $LASTEXITCODE)"
-        exit 1
-    }
+# Create on-logon task with 4-hour throttle (won't re-run if you sign in twice the same morning).
+# We use the XML form so we can set a delay and an execution time limit.
+$user = "$env:USERDOMAIN\$env:USERNAME"
+$action = "powershell.exe"
+$args = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$RunScript`""
+
+$xml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Crypto Signal Digest - runs once per login (throttled).</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>$user</UserId>
+      <Delay>PT2M</Delay>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>$user</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT30M</ExecutionTimeLimit>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>$action</Command>
+      <Arguments>$args</Arguments>
+      <WorkingDirectory>$ProjectDir</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>
+"@
+
+$XmlPath = Join-Path $env:TEMP "crypto_signal_digest_task.xml"
+[System.IO.File]::WriteAllText($XmlPath, $xml, [System.Text.UnicodeEncoding]::new($false, $true))
+Write-Host "    Creating task $TaskName (fires 2 min after login)..."
+& schtasks /Create /TN $TaskName /XML $XmlPath /F | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Failed to create task $TaskName (exit $LASTEXITCODE)"
+    exit 1
 }
+Remove-Item $XmlPath -Force
+
+# 4-hour throttle — read_crypto_signals.py uses .last_run_marker to skip if recent
+# (already implemented in script). So multiple logins/day won't spam Telegram.
 
 Write-Host ""
 Write-Host "==> Install complete."
@@ -139,7 +182,7 @@ Write-Host ""
 Write-Host "Next steps:"
 Write-Host "  - Manual run:  .\run.ps1     (or double-click run-manual.bat)"
 Write-Host "  - View logs:   Get-Content .\logs\*.log"
-Write-Host "  - List tasks:  schtasks /Query /TN CryptoSignalDigest-0800"
+Write-Host "  - View task:   schtasks /Query /TN CryptoSignalDigest-OnLogin"
 Write-Host "  - Remove all:  .\uninstall.ps1"
 
 # --- Step 7: create one-click manual run shortcut

@@ -1,8 +1,9 @@
 # uninstall.ps1 — removes scheduled tasks. Does NOT delete project files.
 
 $TaskNames = @(
+    "CryptoSignalDigest-OnLogin",
+    # legacy task names from earlier installs
     "CryptoSignalDigest-0800", "CryptoSignalDigest-2000",
-    # legacy 4x-daily task names
     "CryptoSignalDigest-0900", "CryptoSignalDigest-1500", "CryptoSignalDigest-2100", "CryptoSignalDigest-0300"
 )
 foreach ($name in $TaskNames) {
