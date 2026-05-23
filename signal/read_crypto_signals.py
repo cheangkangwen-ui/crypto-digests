@@ -224,13 +224,29 @@ Which themes are gaining traction (multi-handle convergence) vs fading (declinin
 - **Other:** 1-2 most important signals
 - **Infra/Builders:** 1-2 most important signals
 
+## 6. 📖 JARGON DECODER
+Pick 4-8 crypto-native terms that appeared in sections 1-5 above (e.g. funding rate, basis trade, LST, LRT, restaking, MEV, perp, AMM, TVL, OI, bridge exploit, ve-tokenomics, depeg, liquidation cascade, points farming, FDV vs market cap, sequencer, rollup, blob fees, ETF flows, basis spread). SKIP basics already-known: BTC, ETH, bull/bear, market cap, wallet, stablecoin.
+
+For each term, write a 3-5 sentence paragraph using this format:
+
+📌 <TERM>
+[Mechanical definition in crypto context] [Closest TradFi analogy with specific instrument] [Why it matters to you as an investor — what signal it gives or what risk it represents]
+
+QUALITY BAR — examples of the depth expected:
+
+📌 FUNDING RATE
+In perpetual futures (crypto's main derivative — contracts with no expiry), longs pay shorts (or vice versa) every 8 hours based on the gap between perp price and spot. Closest TradFi analogy: the overnight repo rate or the carry cost of holding a futures position into delivery — it's the price of leverage. When funding spikes positive, traders are paying steep premiums to stay long, often a contrarian top signal; deeply negative funding can flag capitulation. As an investor, persistent +0.05%/8h funding (~55% annualized) on BTC means leveraged crowd is offsides — watch for forced unwinds.
+
+📌 BRIDGE EXPLOIT
+Cross-chain bridges hold pooled collateral (e.g. ETH locked on Ethereum, wrapped ETH minted on Solana). Exploits drain the locked side — the wrapped tokens on the other chain become unbacked claims. Closest TradFi analogy: a custodial bank run where the custodian's vault is empty but depository receipts still circulate. Historically $2.5B+ stolen this way (Ronin, Wormhole, Nomad). For an investor, bridge TVL is a hidden tail risk in any L2/L1 thesis — a $500M bridge hack can crater the receiving chain's native token 30% in hours regardless of fundamentals.
+
 End with:
 ---SOURCES---
 A numbered list of every handle you cited above, with a 1-line reason each. Include post URLs where available.
 
-READER PROFILE: experienced macro/equity fundamental investor (yield curves, P/E, DCF, credit spreads, options Greeks, duration) with NO crypto background. When introducing crypto-native jargon (funding rate, basis trade, LST, restaking, MEV, etc.), include a parenthetical TradFi analogy on first use — e.g. "funding rate (~ overnight repo rate for perpetual futures)".
+READER PROFILE: experienced macro/equity fundamental investor (yield curves, P/E, DCF, credit spreads, options Greeks, duration, carry trades, 13F filings) with NO crypto background. When introducing crypto-native jargon in sections 1-5, use a parenthetical TradFi analogy on first mention — e.g. "funding rate (~ overnight repo rate for perpetual futures)". Then expand fully in the JARGON DECODER section.
 
-If the raw output is mostly empty or noise, say "Low signal in this window" instead of inventing content."""
+If the raw output is mostly empty or noise, say "Low signal in this window" instead of inventing content. In that case, still produce a JARGON DECODER for 4-5 broadly important terms readers should know."""
 
 
 def synthesize(raw: str, label: str) -> str:
@@ -240,7 +256,7 @@ def synthesize(raw: str, label: str) -> str:
     prompt = SYNTHESIS_PROMPT.format(label=label, raw_posts=raw)
     msg = anthropic_client.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=6000,
+        max_tokens=8000,
         messages=[{"role": "user", "content": prompt}],
     )
     text_parts = [b.text for b in msg.content if b.type == "text"]
