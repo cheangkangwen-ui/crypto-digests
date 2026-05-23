@@ -53,6 +53,10 @@ XAI_API_KEY = _clean(os.environ.get("XAI_API_KEY", ""))
 ANTHROPIC_API_KEY = _clean(os.environ.get("ANTHROPIC_API_KEY", ""))
 TELEGRAM_BOT_TOKEN = _clean(os.environ.get("TELEGRAM_BOT_TOKEN", ""))
 TELEGRAM_CHAT_ID = _clean(os.environ.get("TELEGRAM_CHAT_ID", ""))
+# Normalize: supergroup IDs must start with -100. Some users paste without the leading minus.
+if TELEGRAM_CHAT_ID and not TELEGRAM_CHAT_ID.startswith("-") and TELEGRAM_CHAT_ID.isdigit() and len(TELEGRAM_CHAT_ID) >= 10:
+    TELEGRAM_CHAT_ID = "-" + TELEGRAM_CHAT_ID
+print(f"[startup] TELEGRAM_CHAT_ID prefix={TELEGRAM_CHAT_ID[:5]!r} len={len(TELEGRAM_CHAT_ID)}")
 
 # Telethon (user-account) for reading existing digest group history
 TELEGRAM_API_ID = _clean(os.environ.get("TELEGRAM_API_ID", ""))
