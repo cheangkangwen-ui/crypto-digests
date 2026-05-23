@@ -286,12 +286,12 @@ def get_time_window():
     myt = timezone(timedelta(hours=8))
     current_hour = now_utc.hour
 
-    schedule_hours = [1, 7, 13, 19]
+    schedule_hours = [0, 12]
     prev_hours = [h for h in schedule_hours if h < current_hour]
     if prev_hours:
         prev_run_utc = now_utc.replace(hour=max(prev_hours), minute=0, second=0, microsecond=0)
     else:
-        prev_run_utc = (now_utc - timedelta(days=1)).replace(hour=19, minute=0, second=0, microsecond=0)
+        prev_run_utc = (now_utc - timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
 
     label = f"{prev_run_utc.astimezone(myt).strftime('%H:%M')} - {now_utc.astimezone(myt).strftime('%H:%M')} MYT"
     return prev_run_utc, now_utc, label
