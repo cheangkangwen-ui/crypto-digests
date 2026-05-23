@@ -507,7 +507,7 @@ def generate_trade_ideas(digest_text: str, digest_sources: str) -> str:
         resp = anthropic_client.messages.create(
             model=TRADE_IDEAS_MODEL,
             max_tokens=8000,
-            thinking={"type": "enabled", "budget_tokens": 4000},
+            thinking={"type": "adaptive"},
             tools=[SEARCH_TOOL],
             messages=messages,
         )
