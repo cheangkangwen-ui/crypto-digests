@@ -13,9 +13,11 @@ $LogFile = Join-Path $LogDir "$ts.log"
 
 # Ensure UTF-8 stdout (Phase 1 lesson)
 $env:PYTHONIOENCODING = "utf-8"
+# Unbuffered output so we see live progress
+$env:PYTHONUNBUFFERED = "1"
 
 Write-Output "=== Run started $(Get-Date -Format 'o') ===" | Tee-Object -FilePath $LogFile -Append
-& $VenvPython $Script 2>&1 | Tee-Object -FilePath $LogFile -Append
+& $VenvPython -u $Script 2>&1 | Tee-Object -FilePath $LogFile -Append
 $exitCode = $LASTEXITCODE
 Write-Output "=== Run finished $(Get-Date -Format 'o') exit=$exitCode ===" | Tee-Object -FilePath $LogFile -Append
 exit $exitCode
