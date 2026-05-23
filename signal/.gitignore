@@ -1,6 +1,8 @@
-*.session
-*.session-journal
 .env
+.venv/
 __pycache__/
 *.pyc
-gen_session.py
+*.session
+x_cookies.json
+.last_run_marker
+logs/

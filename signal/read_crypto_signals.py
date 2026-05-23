@@ -1,22 +1,18 @@
 """
-Crypto Signal Digest (Phase 2) — Playwright edition
-====================================================
+Crypto Signal Digest — local Windows edition
+============================================
 
-Architecture: Playwright-as-fetcher + Claude-as-synthesizer
+Reads .env from script directory for secrets, x_cookies.json for X session.
+Runs Playwright + Chromium, scrapes 100 curated X handles, synthesizes via
+Claude, posts to Telegram supergroup via bot.
 
-  Stage 1 (Playwright + chromium + X session cookies): scrape recent posts from
-          100 curated X handles. ~7 min/run.
-  Stage 2 (Claude Opus 4.7): reasoning, sub-list grouping, 5-section digest.
-  Stage 3 (Telegram bot API): chunked post + pin first message.
-
-Free except Claude (~$0.30/run).
+Scheduled by Windows Task Scheduler 4x daily (UTC 1/7/13/19).
 """
 
 import asyncio
 import csv
 import json
 import os
-import re
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -26,40 +22,69 @@ import requests
 import anthropic
 from playwright.async_api import async_playwright
 
-# ------- stdout encoding fix (Phase 1 lesson) -------
+# ------- stdout encoding fix (Phase 1 lesson #4) -------
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
-# ------- BOM cleaner -------
+# ------- Paths -------
+SCRIPT_DIR = Path(__file__).resolve().parent
+ENV_FILE = SCRIPT_DIR / ".env"
+COOKIES_FILE = SCRIPT_DIR / "x_cookies.json"
+HANDLES_CSV = SCRIPT_DIR / "handles.csv"
+LOG_DIR = SCRIPT_DIR / "logs"
+LAST_RUN_FILE = SCRIPT_DIR / ".last_run_marker"
+
+
+# ------- BOM cleaner (Phase 1 lesson #1: PowerShell injects UTF-16 BOM) -------
 def _clean(val: str) -> str:
     if val is None:
         return ""
     return val.strip().replace("\ufeff", "").replace(" ", "")
 
 
-# ------- Env vars -------
+# ------- Load .env -------
+def load_env():
+    if not ENV_FILE.exists():
+        sys.exit(f"ERROR: {ENV_FILE} not found. Run install.ps1 first.")
+    for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        # strip optional quotes
+        v = v.strip()
+        if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+            v = v[1:-1]
+        os.environ.setdefault(k.strip(), v)
+
+
+load_env()
+
 ANTHROPIC_API_KEY = _clean(os.environ.get("ANTHROPIC_API_KEY", ""))
 TELEGRAM_BOT_TOKEN = _clean(os.environ.get("TELEGRAM_BOT_TOKEN", ""))
 TELEGRAM_CHAT_ID = _clean(os.environ.get("TELEGRAM_CHAT_ID", ""))
-X_COOKIES_JSON = os.environ.get("X_COOKIES_JSON", "").strip()  # raw JSON, keep newlines
 SKIP_DUPLICATE_CHECK = os.environ.get("SKIP_DUPLICATE_CHECK", "").strip() in ("1", "true", "True")
+DEBUG_HANDLE_LIMIT = os.environ.get("DEBUG_HANDLE_LIMIT", "").strip()
 
 for name, val in [
     ("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY),
     ("TELEGRAM_BOT_TOKEN", TELEGRAM_BOT_TOKEN),
     ("TELEGRAM_CHAT_ID", TELEGRAM_CHAT_ID),
-    ("X_COOKIES_JSON", X_COOKIES_JSON),
 ]:
     if not val:
-        sys.exit(f"ERROR: {name} env var missing")
+        sys.exit(f"ERROR: {name} missing from {ENV_FILE}")
+
+if not COOKIES_FILE.exists():
+    sys.exit(f"ERROR: {COOKIES_FILE} not found. Export from Cookie-Editor extension.")
 
 # ------- Constants -------
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-opus-4-7").strip() or "claude-opus-4-7"
-HANDLES_CSV = Path(__file__).parent / "handles.csv"
 TG_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
-MAX_POSTS_PER_HANDLE = 10  # cap to keep scrape time bounded
-SCRAPE_CONCURRENCY = 3  # parallel browser pages
+MAX_POSTS_PER_HANDLE = 10
+SCRAPE_CONCURRENCY = 4  # higher on local since IP isn't flagged
 HANDLE_TIMEOUT_MS = 20_000
 
 
@@ -90,38 +115,64 @@ def load_handles() -> list[tuple[str, str]]:
     return out
 
 
+# ------- Convert Cookie-Editor JSON to Playwright format -------
+def load_cookies_for_playwright() -> list[dict]:
+    raw = json.loads(COOKIES_FILE.read_text(encoding="utf-8"))
+    samesite_map = {
+        "no_restriction": "None",
+        "lax": "Lax",
+        "strict": "Strict",
+        None: "Lax",
+        "unspecified": "Lax",
+        "None": "None",
+        "Lax": "Lax",
+        "Strict": "Strict",
+    }
+    out = []
+    for c in raw:
+        # Support both Cookie-Editor format and Playwright format
+        ss = c.get("sameSite")
+        out.append(
+            {
+                "name": c["name"],
+                "value": c["value"],
+                "domain": c["domain"],
+                "path": c.get("path", "/"),
+                "expires": float(c.get("expirationDate", c.get("expires", -1))),
+                "httpOnly": bool(c.get("httpOnly", False)),
+                "secure": bool(c.get("secure", False)),
+                "sameSite": samesite_map.get(ss, "Lax"),
+            }
+        )
+    return out
+
+
 # ============================================================
 # STAGE 1 — Playwright scrapes X
 # ============================================================
 async def scrape_handle(context, handle: str, since_dt: datetime, debug: bool = False) -> list[dict]:
-    """Scrape recent posts for one handle, filter to since_dt. Returns list of post dicts."""
     page = await context.new_page()
     posts = []
     try:
         url = f"https://x.com/{handle}"
         await page.goto(url, timeout=HANDLE_TIMEOUT_MS, wait_until="domcontentloaded")
-        # Wait for any tweet article to render
         try:
-            await page.wait_for_selector("article[data-testid='tweet']", timeout=8000)
-        except Exception as e:
+            await page.wait_for_selector("article[data-testid='tweet']", timeout=10000)
+        except Exception:
             if debug:
                 title = await page.title()
-                final_url = page.url
                 body_text = await page.evaluate("() => document.body.innerText.slice(0, 600)")
-                print(f"  DEBUG @{handle}: no tweet selector. title={title!r} url={final_url!r}")
+                print(f"  DEBUG @{handle}: no tweet selector. title={title!r}")
                 print(f"  DEBUG body preview: {body_text!r}")
             return []
 
-        # Scroll a few times to load recent posts
         for _ in range(3):
             await page.mouse.wheel(0, 3000)
             await asyncio.sleep(0.8)
 
-        # Extract tweets
         articles = await page.query_selector_all("article[data-testid='tweet']")
         for art in articles[:MAX_POSTS_PER_HANDLE]:
             try:
-                # timestamp
                 time_el = await art.query_selector("time")
                 ts = await time_el.get_attribute("datetime") if time_el else None
                 if not ts:
@@ -129,20 +180,18 @@ async def scrape_handle(context, handle: str, since_dt: datetime, debug: bool = 
                 post_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                 if post_dt < since_dt:
                     continue
-                # text
                 text_el = await art.query_selector("div[data-testid='tweetText']")
                 text = (await text_el.inner_text()).replace("\n", " ").strip() if text_el else ""
-                # link
                 link_el = await art.query_selector("a[href*='/status/']")
                 href = await link_el.get_attribute("href") if link_el else ""
-                url = f"https://x.com{href}" if href and href.startswith("/") else href
+                url_ = f"https://x.com{href}" if href and href.startswith("/") else href
                 if text:
                     posts.append(
                         {
                             "handle": handle,
                             "timestamp": post_dt.isoformat(timespec="minutes"),
                             "text": text[:600],
-                            "url": url,
+                            "url": url_,
                         }
                     )
             except Exception:
@@ -155,7 +204,7 @@ async def scrape_handle(context, handle: str, since_dt: datetime, debug: bool = 
 
 
 async def scrape_all_handles(handles: list[tuple[str, str]], since_dt: datetime) -> list[dict]:
-    cookies = json.loads(X_COOKIES_JSON)
+    cookies = load_cookies_for_playwright()
     all_posts: list[dict] = []
     sem = asyncio.Semaphore(SCRAPE_CONCURRENCY)
 
@@ -166,7 +215,7 @@ async def scrape_all_handles(handles: list[tuple[str, str]], since_dt: datetime)
         )
         context = await browser.new_context(
             user_agent=(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
             ),
             viewport={"width": 1280, "height": 900},
@@ -174,7 +223,6 @@ async def scrape_all_handles(handles: list[tuple[str, str]], since_dt: datetime)
         )
         await context.add_cookies(cookies)
 
-        # First handle: turn on debug to see what X is serving us
         async def worker(handle: str, sub: str, debug: bool = False):
             async with sem:
                 posts = await scrape_handle(context, handle, since_dt, debug=debug)
@@ -184,7 +232,6 @@ async def scrape_all_handles(handles: list[tuple[str, str]], since_dt: datetime)
                     print(f"  @{handle} [{sub}] → {len(posts)} posts")
                 return posts
 
-        # Debug first 3 handles for visibility on auth/anti-bot state
         results = await asyncio.gather(*(worker(h, s, debug=(i < 3)) for i, (h, s) in enumerate(handles)))
         for r in results:
             all_posts.extend(r)
@@ -247,7 +294,6 @@ def synthesize_with_claude(posts: list[dict], label: str) -> str:
     if not posts:
         return f"🪙 CRYPTO SIGNAL DIGEST — {label}\n\nLow signal in this window — no posts retrieved from the 100 tracked handles."
 
-    # Serialize posts as JSON lines, sorted by sub_list then handle
     posts_sorted = sorted(posts, key=lambda x: (x.get("sub_list", ""), x["handle"]))
     raw_posts = "\n".join(json.dumps(p, ensure_ascii=False) for p in posts_sorted)
 
@@ -293,9 +339,6 @@ def tg_pin_message(message_id: int):
 
 
 # ------- Duplicate guard -------
-LAST_RUN_FILE = Path(__file__).parent / ".last_run_marker"
-
-
 def is_duplicate_run(window_label: str) -> bool:
     if SKIP_DUPLICATE_CHECK:
         return False
@@ -339,10 +382,9 @@ async def amain():
         return
 
     handles = load_handles()
-    debug_limit = os.environ.get("DEBUG_HANDLE_LIMIT", "").strip()
-    if debug_limit.isdigit():
-        handles = handles[: int(debug_limit)]
-        print(f"DEBUG_HANDLE_LIMIT={debug_limit} — only scraping first {len(handles)} handles")
+    if DEBUG_HANDLE_LIMIT.isdigit():
+        handles = handles[: int(DEBUG_HANDLE_LIMIT)]
+        print(f"DEBUG_HANDLE_LIMIT={DEBUG_HANDLE_LIMIT} — only scraping first {len(handles)} handles")
     print(f"Loaded {len(handles)} handles\n")
 
     print("=== Stage 1: Playwright scrapes X ===")
@@ -351,10 +393,9 @@ async def amain():
     print(f"\nScraped {len(posts)} posts across {len(handles)} handles in {time.time() - t0:.1f}s")
 
     if len(posts) == 0:
-        # Heartbeat alert — session might be invalidated
         try:
             tg_send_message(
-                f"⚠️ Crypto Signal Digest — window {label}: scraped 0 posts. X session cookies may be invalid. Check X_COOKIES_JSON secret."
+                f"⚠️ Crypto Signal Digest — window {label}: scraped 0 posts. X cookies may be expired. Re-export via Cookie-Editor → save to x_cookies.json."
             )
         except Exception as e:
             print(f"Failed to send health alert: {e}")
@@ -387,6 +428,7 @@ async def amain():
 
 
 def main():
+    LOG_DIR.mkdir(exist_ok=True)
     asyncio.run(amain())
 
 
