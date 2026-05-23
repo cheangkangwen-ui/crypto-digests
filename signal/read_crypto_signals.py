@@ -325,11 +325,7 @@ Specific actionable setups mentioned by handles. Each: $TICKER, direction (long/
 Which themes are gaining traction (multi-handle convergence) vs fading (declining mentions, contradicting calls). Brief.
 
 ## 5. BY SUB-LIST
-- **DeFi:** 1-2 most important signals
-- **Trading:** 1-2 most important signals
-- **Macro:** 1-2 most important signals (skip if commoditized)
-- **Other:** 1-2 most important signals
-- **Infra/Builders:** 1-2 most important signals
+For EACH sub_list that appears in the verified posts JSON below, write a bolded label followed by 1-2 most important signals from handles in that sub_list. Discover the sub_lists dynamically from the data — do NOT assume a fixed set. Skip any sub_list with zero verified posts (don't list it at all). Format: `- **<sub_list_name>:** <signals>`
 
 ## 6. 📖 JARGON DECODER
 Pick 4-8 crypto-native terms that appeared in sections 1-5 above (e.g. funding rate, basis trade, LST, LRT, restaking, MEV, perp, AMM, TVL, OI, bridge exploit, ve-tokenomics, depeg, liquidation cascade, points farming, FDV vs market cap, sequencer, rollup, blob fees, ETF flows, basis spread). SKIP basics already-known: BTC, ETH, bull/bear, market cap, wallet, stablecoin.
@@ -366,6 +362,8 @@ def synthesize(verified_posts: list[dict], label: str) -> str:
         )
 
     raw = json.dumps(verified_posts, ensure_ascii=False, indent=2)
+    sub_lists_present = sorted({p.get("sub_list", "Unknown") for p in verified_posts})
+    print(f"  Sub-lists in verified posts: {sub_lists_present}")
     prompt = SYNTHESIS_PROMPT.format(label=label, n_posts=len(verified_posts), raw_posts=raw)
     msg = anthropic_client.messages.create(
         model=CLAUDE_MODEL,
