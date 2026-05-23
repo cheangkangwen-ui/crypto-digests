@@ -59,15 +59,29 @@ function Get-OrPrompt($key, $envContent, $prompt) {
 
 $envLines = @()
 if (Test-Path $EnvFile) {
-    $envLines = Get-Content $EnvFile -Encoding UTF8
+    $envLines = @(Get-Content $EnvFile -Encoding UTF8 | Where-Object { $_ -match "=" })
 }
 $newLines = @()
 $newLines += Get-OrPrompt "ANTHROPIC_API_KEY" $envLines "    Anthropic API key (sk-ant-...)"
 $newLines += Get-OrPrompt "TELEGRAM_BOT_TOKEN" $envLines "    Telegram bot token"
 $newLines += Get-OrPrompt "TELEGRAM_CHAT_ID" $envLines "    Telegram chat ID (negative number for supergroup)"
 
-$finalLines = $envLines + ($newLines | Where-Object { $_ })
-$finalLines | Out-File -FilePath $EnvFile -Encoding UTF8 -NoNewline
+$finalLines = @($envLines) + @($newLines | Where-Object { $_ })
+# Deduplicate: keep last occurrence of each KEY=...
+$seen = @{}
+$deduped = New-Object System.Collections.ArrayList
+for ($i = $finalLines.Count - 1; $i -ge 0; $i--) {
+    $line = $finalLines[$i]
+    if ($line -match "^([^=]+)=") {
+        $k = $matches[1]
+        if (-not $seen.ContainsKey($k)) {
+            $seen[$k] = $true
+            [void]$deduped.Insert(0, $line)
+        }
+    }
+}
+# Write as ASCII with proper newlines (avoids BOM and missing line breaks)
+[System.IO.File]::WriteAllLines($EnvFile, $deduped, [System.Text.Encoding]::ASCII)
 
 Write-Host "    Wrote $EnvFile"
 
