@@ -548,6 +548,8 @@ RAW MESSAGES:
             print("\n  --- GENERATING TRADE IDEAS PDF ---\n")
             pdf_path = await generate_trade_ideas_pdf(ai_client, body, sources, label)
             if pdf_path:
+                if not tg.is_connected():
+                    await tg.connect()
                 trade_group = await get_or_create_group(tg, TRADE_IDEAS_GROUP_NAME, "Actionable crypto trade ideas")
                 sent_pdf = await tg.send_file(
                     trade_group,
