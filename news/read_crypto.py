@@ -57,25 +57,18 @@ def web_search(query: str, max_results: int = 6) -> str:
         return f"Search failed: {e}"
 
 
-MACRO_FRAMEWORK = """MACRO ANALYSIS FRAMEWORK
-- Narratives: What major narratives/themes are driving crypto? Sustainable? What's next?
-- Growth regime: Inflationary boom/bust vs disinflationary boom/bust — which quadrant are we in?
-- Monetary policy: Rate decisions, CB stance, liquidity conditions, M2 trends
-- Fiscal policy: Government spending, stablecoin regulation, crypto-specific legislation
-- Positioning & flows: On-chain flows, exchange inflows/outflows, stablecoin supply, funding rates
-- Sentiment: Fear & Greed index, social sentiment, are people fading or chasing?
-- Risk: What could go wrong? Why would someone sell this to you?
-- Catalyst: What will drive the next narrative shift?"""
+from pathlib import Path
+_FRAMEWORKS_DIR = Path(__file__).resolve().parent / "frameworks"
 
-TRADING_FRAMEWORK = """TRADE EXECUTION FRAMEWORK
-- Technicals: Key support/resistance, RSI, 50/200d MA, trend structure
-- Sizing: 1-4% risk per trade, confidence-rated. Wide stops, not at obvious levels.
-- Entry structure: DCA below intrinsic value, or wait for confirmation?
-- Risk-reward: Asymmetric setups only. What's the 5:1 or better?
-- Correlations: Check correlation with BTC, ETH, and existing positions
-- Historical playbook: When did we last see this setup? What happened?
-- Signal grading: Low/medium/high grade signal — what data would upgrade it?
-- Monitoring: What invalidates the thesis? When to cut?"""
+def _load_framework(name: str) -> str:
+    path = _FRAMEWORKS_DIR / f"{name}.md"
+    if not path.exists():
+        print(f"WARN: framework file not found: {path}")
+        return ""
+    return path.read_text(encoding="utf-8")
+
+MACRO_FRAMEWORK = _load_framework("macro")
+TRADING_FRAMEWORK = _load_framework("trading")
 
 
 async def generate_trade_ideas_pdf(ai_client, digest_text, sources_text, label):
