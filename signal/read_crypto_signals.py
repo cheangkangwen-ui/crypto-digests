@@ -89,33 +89,26 @@ def load_handles() -> list[tuple[str, str]]:
 
 
 # ============================================================
-# STAGE 1 — Grok x_search (single call, all handles)
+# STAGE 1 — Grok x_search (batched, max 20 handles per call)
 # ============================================================
-def fetch_via_grok(handles: list[tuple[str, str]], from_dt: datetime, to_dt: datetime) -> str:
-    """
-    Single xAI Responses API call with x_search tool covering all 100 handles
-    over the time window. Returns Grok's natural-language extraction of the
-    relevant posts — we hand this straight to Claude as raw signal.
+GROK_HANDLES_PER_CALL = 20  # xAI hard limit
 
-    NOTE: to_date is EXCLUSIVE in xAI x_search — add +1 day to include 'today'.
-    """
-    handle_list = [h for h, _ in handles]
-    sub_map = {h: s for h, s in handles}
 
-    from_date = from_dt.date().isoformat()
-    to_date = (to_dt + timedelta(days=1)).date().isoformat()  # exclusive bound
+def _grok_one_batch(handle_batch: list[tuple[str, str]], from_date: str, to_date: str, batch_label: str) -> str:
+    handle_list = [h for h, _ in handle_batch]
+    sub_map = {h: s for h, s in handle_batch}
 
     instructions = (
         "You are a crypto-signal extractor. Pull the highest-signal posts from the supplied X handles "
-        "within the date window. For EACH post you retrieve, output:\n"
+        "within the date window. For EACH post you retrieve, output a JSON line with:\n"
         '  - handle (e.g. @elonmusk)\n'
-        "  - sub_list label (DeFi / Trading / Macro / Other / Infra-Builders) — provided in the mapping below\n"
+        "  - sub_list label (from the mapping below)\n"
         "  - timestamp (ISO)\n"
-        "  - full post text\n"
-        "  - URL\n\n"
+        "  - text (full post)\n"
+        "  - url\n\n"
         "Prioritize: market calls, trade ideas with concrete levels, narrative shifts, protocol launches, "
         "regulatory events, macro pivots affecting crypto. SKIP shitposts, memes without signal, and replies.\n\n"
-        "Format as JSON Lines (one post per line). Aim for ~80-150 posts total across all handles.\n\n"
+        "Output ONLY JSON Lines, no prose. Aim for ~15-30 posts in this batch.\n\n"
         f"Sub-list mapping (handle -> sub_list):\n{json.dumps(sub_map)}"
     )
 
@@ -133,10 +126,6 @@ def fetch_via_grok(handles: list[tuple[str, str]], from_dt: datetime, to_dt: dat
         ],
     }
 
-    print(f"  Grok model: {GROK_MODEL}")
-    print(f"  Handles: {len(handle_list)}")
-    print(f"  Window: {from_date} -> {to_date} (exclusive)")
-
     r = requests.post(
         "https://api.x.ai/v1/responses",
         headers={
@@ -147,24 +136,51 @@ def fetch_via_grok(handles: list[tuple[str, str]], from_dt: datetime, to_dt: dat
         timeout=600,
     )
     if not r.ok:
-        print(f"  Grok HTTP {r.status_code}: {r.text[:1000]}")
+        print(f"  Grok HTTP {r.status_code} ({batch_label}): {r.text[:600]}")
         r.raise_for_status()
 
     data = r.json()
-
-    # xAI Responses API: output is array of items; we want the assistant text.
     text_chunks = []
     for item in data.get("output", []):
         if item.get("type") == "message":
             for c in item.get("content", []):
                 if c.get("type") == "output_text":
                     text_chunks.append(c.get("text", ""))
-    raw = "\n".join(text_chunks).strip()
+    out = "\n".join(text_chunks).strip()
 
     usage = data.get("usage", {})
-    print(f"  Grok usage: {usage}")
-    print(f"  Raw output: {len(raw)} chars")
+    print(f"  {batch_label}: {len(out)} chars, usage={usage}")
+    return out
 
+
+def fetch_via_grok(handles: list[tuple[str, str]], from_dt: datetime, to_dt: datetime) -> str:
+    """
+    xAI x_search caps at 20 handles per call, so we batch.
+    NOTE: to_date is EXCLUSIVE — add +1 day to include 'today'.
+    """
+    from_date = from_dt.date().isoformat()
+    to_date = (to_dt + timedelta(days=1)).date().isoformat()
+
+    batches = [
+        handles[i : i + GROK_HANDLES_PER_CALL]
+        for i in range(0, len(handles), GROK_HANDLES_PER_CALL)
+    ]
+    print(f"  Grok model: {GROK_MODEL}")
+    print(f"  Handles: {len(handles)} → {len(batches)} batches of ≤{GROK_HANDLES_PER_CALL}")
+    print(f"  Window: {from_date} -> {to_date} (exclusive)")
+
+    all_chunks = []
+    for i, batch in enumerate(batches, 1):
+        label = f"batch {i}/{len(batches)} ({len(batch)} handles)"
+        try:
+            chunk = _grok_one_batch(batch, from_date, to_date, label)
+            if chunk:
+                all_chunks.append(chunk)
+        except Exception as e:
+            print(f"  {label} FAILED: {type(e).__name__}: {str(e)[:200]}")
+
+    raw = "\n".join(all_chunks).strip()
+    print(f"  Total raw output: {len(raw)} chars from {len(all_chunks)}/{len(batches)} successful batches")
     return raw
 
 
