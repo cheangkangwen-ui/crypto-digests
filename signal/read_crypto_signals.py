@@ -94,28 +94,41 @@ def load_handles() -> list[tuple[str, str]]:
 GROK_HANDLES_PER_CALL = 20  # xAI hard limit
 
 
-def _grok_one_batch(handle_batch: list[tuple[str, str]], from_date: str, to_date: str, batch_label: str) -> str:
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Strict X status URL: https://x.com/<handle>/status/<digits>
+X_STATUS_RE = re.compile(r"^https?://(?:x\.com|twitter\.com)/([A-Za-z0-9_]{1,15})/status/(\d+)")
+
+
+def _grok_one_batch(handle_batch: list[tuple[str, str]], from_date: str, to_date: str, batch_label: str) -> list[dict]:
     handle_list = [h for h, _ in handle_batch]
     sub_map = {h: s for h, s in handle_batch}
 
     instructions = (
-        "You are a crypto-signal extractor. Pull the highest-signal posts from the supplied X handles "
-        "within the date window. For EACH post you retrieve, output a JSON line with:\n"
-        '  - handle (e.g. @elonmusk)\n'
-        "  - sub_list label (from the mapping below)\n"
-        "  - timestamp (ISO)\n"
-        "  - text (full post)\n"
-        "  - url\n\n"
-        "Prioritize: market calls, trade ideas with concrete levels, narrative shifts, protocol launches, "
-        "regulatory events, macro pivots affecting crypto. SKIP shitposts, memes without signal, and replies.\n\n"
-        "Output ONLY JSON Lines, no prose. Aim for ~15-30 posts in this batch.\n\n"
-        f"Sub-list mapping (handle -> sub_list):\n{json.dumps(sub_map)}"
+        "You are a strict data extractor. Use the x_search tool to retrieve real posts from the supplied X handles "
+        "in the date window. You MUST NOT paraphrase, summarize, or invent.\n\n"
+        "OUTPUT FORMAT: a single JSON array (and NOTHING else — no prose, no markdown, no code fences). "
+        "Each element must have EXACTLY these keys:\n"
+        '  - "handle": the X username, no @ prefix, MUST be one of the allowed handles\n'
+        '  - "sub_list": the label from the mapping below\n'
+        '  - "timestamp": ISO 8601 with timezone (the post\'s actual creation time)\n'
+        '  - "text": the EXACT verbatim post text — do not summarize, do not truncate, do not edit\n'
+        '  - "url": the canonical post URL in the form https://x.com/<handle>/status/<id> — must be a real URL returned by x_search\n\n'
+        "RULES:\n"
+        "- If x_search returns nothing for a handle, OMIT that handle. Do not invent posts.\n"
+        "- If you cannot retrieve the verbatim text, OMIT that post.\n"
+        "- If the URL is not in the form https://x.com/<handle>/status/<id>, OMIT that post.\n"
+        "- Skip pure shitposts, low-effort memes, and pure replies. Keep market calls, trade ideas, "
+        "narrative shifts, protocol news, regulatory events, macro pivots.\n"
+        "- If x_search returns zero posts for the entire batch, output: []\n\n"
+        f"Allowed handles (sub_list mapping): {json.dumps(sub_map)}"
     )
 
     body = {
         "model": GROK_MODEL,
         "instructions": instructions,
-        "input": f"Pull the highest-signal posts from these handles between {from_date} and {to_date} (exclusive).",
+        "input": f"Retrieve all signal-worthy posts from these handles between {from_date} and {to_date} (exclusive). Return only the JSON array.",
         "tools": [
             {
                 "type": "x_search",
@@ -149,13 +162,101 @@ def _grok_one_batch(handle_batch: list[tuple[str, str]], from_date: str, to_date
     out = "\n".join(text_chunks).strip()
 
     usage = data.get("usage", {})
-    print(f"  {batch_label}: {len(out)} chars, usage={usage}")
-    return out
+    posts = _parse_json_array(out)
+    print(f"  {batch_label}: parsed {len(posts)} posts, usage={usage}")
+    return posts
 
 
-def fetch_via_grok(handles: list[tuple[str, str]], from_dt: datetime, to_dt: datetime) -> str:
+def _parse_json_array(s: str) -> list[dict]:
+    """Parse Grok's JSON-array output, tolerating stray markdown fences."""
+    s = s.strip()
+    # Strip ```json ... ``` fences if present
+    if s.startswith("```"):
+        s = re.sub(r"^```(?:json)?\s*", "", s)
+        s = re.sub(r"\s*```\s*$", "", s)
+    # Find the outermost JSON array if there's prose around it
+    start = s.find("[")
+    end = s.rfind("]")
+    if start == -1 or end == -1 or end < start:
+        return []
+    try:
+        arr = json.loads(s[start : end + 1])
+        return [p for p in arr if isinstance(p, dict)]
+    except json.JSONDecodeError as e:
+        print(f"    JSON parse error: {e}; raw snippet: {s[:200]!r}")
+        return []
+
+
+def _verify_post(post: dict, allowed_handles: set[str]) -> tuple[bool, str]:
     """
-    xAI x_search caps at 20 handles per call, so we batch.
+    Verify a single post:
+      1. URL matches https://x.com/<handle>/status/<id> AND <handle> equals post['handle']
+      2. handle is in the allowed set
+      3. URL HEAD request returns 2xx or 3xx (not 404)
+    Returns (ok, reason).
+    """
+    url = (post.get("url") or "").strip()
+    handle = (post.get("handle") or "").lstrip("@").strip()
+    text = (post.get("text") or "").strip()
+
+    if not url or not handle or not text:
+        return False, "missing required field"
+    if handle not in allowed_handles:
+        return False, f"handle '{handle}' not in allowed list (Grok hallucinated)"
+
+    m = X_STATUS_RE.match(url)
+    if not m:
+        return False, f"url shape invalid: {url}"
+    url_handle = m.group(1)
+    if url_handle.lower() != handle.lower():
+        return False, f"url handle '{url_handle}' ≠ claimed handle '{handle}'"
+
+    # Verify URL resolves. Use GET with allow_redirects since x.com sometimes 405s HEAD.
+    try:
+        r = requests.get(
+            url,
+            allow_redirects=True,
+            timeout=12,
+            headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+            },
+        )
+    except requests.RequestException as e:
+        return False, f"network error: {type(e).__name__}"
+
+    # X returns 200 for both real posts and the generic interstitial.
+    # A deleted/nonexistent status redirects to /<handle> or returns the suspended page.
+    final = r.url.lower()
+    if "/status/" not in final:
+        return False, f"final url has no /status/: {r.url}"
+    # accept any 2xx/3xx
+    if r.status_code >= 400:
+        return False, f"http {r.status_code}"
+    return True, "ok"
+
+
+def verify_posts(posts: list[dict], allowed_handles: set[str]) -> tuple[list[dict], list[dict]]:
+    """Returns (verified, rejected). Parallelizes URL checks."""
+    if not posts:
+        return [], []
+    verified: list[dict] = []
+    rejected: list[dict] = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(_verify_post, p, allowed_handles): p for p in posts}
+        for fut in as_completed(futures):
+            p = futures[fut]
+            ok, reason = fut.result()
+            if ok:
+                verified.append(p)
+            else:
+                rejected.append({**p, "_reject_reason": reason})
+    return verified, rejected
+
+
+def fetch_via_grok(handles: list[tuple[str, str]], from_dt: datetime, to_dt: datetime) -> list[dict]:
+    """
+    Returns a list of post dicts. xAI x_search caps at 20 handles/call, so we batch.
     NOTE: to_date is EXCLUSIVE — add +1 day to include 'today'.
     """
     from_date = from_dt.date().isoformat()
@@ -169,19 +270,17 @@ def fetch_via_grok(handles: list[tuple[str, str]], from_dt: datetime, to_dt: dat
     print(f"  Handles: {len(handles)} → {len(batches)} batches of ≤{GROK_HANDLES_PER_CALL}")
     print(f"  Window: {from_date} -> {to_date} (exclusive)")
 
-    all_chunks = []
+    all_posts: list[dict] = []
     for i, batch in enumerate(batches, 1):
         label = f"batch {i}/{len(batches)} ({len(batch)} handles)"
         try:
-            chunk = _grok_one_batch(batch, from_date, to_date, label)
-            if chunk:
-                all_chunks.append(chunk)
+            posts = _grok_one_batch(batch, from_date, to_date, label)
+            all_posts.extend(posts)
         except Exception as e:
             print(f"  {label} FAILED: {type(e).__name__}: {str(e)[:200]}")
 
-    raw = "\n".join(all_chunks).strip()
-    print(f"  Total raw output: {len(raw)} chars from {len(all_chunks)}/{len(batches)} successful batches")
-    return raw
+    print(f"  Grok returned {len(all_posts)} candidate posts")
+    return all_posts
 
 
 # ============================================================
@@ -189,14 +288,22 @@ def fetch_via_grok(handles: list[tuple[str, str]], from_dt: datetime, to_dt: dat
 # ============================================================
 anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-SYNTHESIS_PROMPT = """You are synthesizing a Crypto Signal Digest from raw X posts retrieved by Grok over the last 24h from 100 high-signal handles.
+SYNTHESIS_PROMPT = """You are synthesizing a Crypto Signal Digest from VERIFIED X posts.
 
 Window: {label}
+Verified posts: {n_posts}
 
-RAW GROK OUTPUT (JSON lines of posts, or noise if low signal):
+VERIFIED POSTS (JSON array, each post has handle/sub_list/timestamp/text/url — ALL URLs have been HTTP-checked to resolve to real X status pages):
 ---
 {raw_posts}
 ---
+
+CRITICAL ANTI-HALLUCINATION RULES:
+- You may ONLY cite handles and quote text that appear in the verified posts array above.
+- Every URL you write in the SOURCES section MUST be copied verbatim from a post's "url" field above. Do not modify, shorten, or invent URLs.
+- If a topic is not represented in the verified posts, you may NOT include it.
+- If you quote a post, the quote must be a literal substring of that post's "text" field.
+- If verified posts are too few or off-topic, write "Low signal in this window — only N verified posts retrieved" and produce a thin digest with only what's supported.
 
 Synthesize into this EXACT structure. Be concrete, cite handles, no fluff.
 
@@ -242,18 +349,24 @@ Cross-chain bridges hold pooled collateral (e.g. ETH locked on Ethereum, wrapped
 
 End with:
 ---SOURCES---
-A numbered list of every handle you cited above, with a 1-line reason each. Include post URLs where available.
+A numbered list. For EACH source: handle, 1-line reason cited, and the EXACT url from the verified posts array. Only include sources you actually drew from above. Do not add commentary URLs.
 
 READER PROFILE: experienced macro/equity fundamental investor (yield curves, P/E, DCF, credit spreads, options Greeks, duration, carry trades, 13F filings) with NO crypto background. When introducing crypto-native jargon in sections 1-5, use a parenthetical TradFi analogy on first mention — e.g. "funding rate (~ overnight repo rate for perpetual futures)". Then expand fully in the JARGON DECODER section.
 
 If the raw output is mostly empty or noise, say "Low signal in this window" instead of inventing content. In that case, still produce a JARGON DECODER for 4-5 broadly important terms readers should know."""
 
 
-def synthesize(raw: str, label: str) -> str:
-    if not raw.strip():
-        return f"🪙 CRYPTO SIGNAL DIGEST — {label}\n\nLow signal in this window — Grok returned no posts."
+def synthesize(verified_posts: list[dict], label: str) -> str:
+    if not verified_posts:
+        return (
+            f"🪙 CRYPTO SIGNAL DIGEST — {label}\n\n"
+            "Low signal in this window — zero verified posts retrieved. "
+            "This means either Grok's x_search returned nothing usable, or all candidates failed URL verification. "
+            "No digest content can be produced without verified sources."
+        )
 
-    prompt = SYNTHESIS_PROMPT.format(label=label, raw_posts=raw)
+    raw = json.dumps(verified_posts, ensure_ascii=False, indent=2)
+    prompt = SYNTHESIS_PROMPT.format(label=label, n_posts=len(verified_posts), raw_posts=raw)
     msg = anthropic_client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=8000,
@@ -323,23 +436,39 @@ def main():
     handles = load_handles()
     print(f"Loaded {len(handles)} handles\n")
 
-    print("=== Stage 1: Grok x_search ===")
+    print("=== Stage 1: Grok x_search (strict JSON extraction) ===")
     t0 = time.time()
-    raw = fetch_via_grok(handles, from_dt, to_dt)
+    candidate_posts = fetch_via_grok(handles, from_dt, to_dt)
     print(f"Stage 1 done in {time.time() - t0:.1f}s\n")
 
-    if not raw.strip():
+    print("=== Stage 1b: Verify candidate posts ===")
+    t_v = time.time()
+    allowed_handles = {h for h, _ in handles}
+    verified, rejected = verify_posts(candidate_posts, allowed_handles)
+    print(f"  Verified: {len(verified)} / Rejected: {len(rejected)} in {time.time() - t_v:.1f}s")
+    if rejected:
+        # Tally reject reasons for visibility
+        from collections import Counter
+
+        reasons = Counter(r.get("_reject_reason", "?") for r in rejected)
+        for reason, n in reasons.most_common(10):
+            print(f"    ✖ {n}× {reason}")
+
+    if not verified:
         try:
             tg_send_message(
-                f"⚠️ Crypto Signal Digest — {label}: Grok returned no posts. "
-                "Check XAI_API_KEY credit / x_search availability."
+                f"⚠️ Crypto Signal Digest — {label}: 0 posts passed verification "
+                f"({len(candidate_posts)} candidates from Grok, all rejected). "
+                "No digest sent to avoid hallucinated content."
             )
         except Exception as e:
             print(f"Failed to send health alert: {e}")
+        print("Aborting: nothing verified. Health alert sent.")
+        return
 
-    print("=== Stage 2: Claude synthesizes ===")
+    print("\n=== Stage 2: Claude synthesizes (verified posts only) ===")
     t1 = time.time()
-    digest = synthesize(raw, label)
+    digest = synthesize(verified, label)
     print(f"Stage 2 done in {time.time() - t1:.1f}s, digest = {len(digest)} chars\n")
 
     print("=== Stage 3: Telegram ===")
@@ -357,6 +486,13 @@ def main():
 
     if sources.strip():
         tg_send_message("🔗 SOURCES\n" + sources.strip(), disable_notification=True)
+
+    # Verification footer for transparency
+    footer = (
+        f"✅ {len(verified)} posts verified (HTTP-checked URLs, handle-matched). "
+        f"{len(rejected)} candidates rejected."
+    )
+    tg_send_message(footer, disable_notification=True)
 
     if first_msg_id:
         tg_pin_message(first_msg_id)
