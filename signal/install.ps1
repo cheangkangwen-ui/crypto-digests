@@ -97,10 +97,13 @@ Write-Host "[6/6] Registering Windows Scheduled Tasks..."
 $LocalHours = @(9, 15, 21, 3)
 $TaskNames = @("CryptoSignalDigest-0900", "CryptoSignalDigest-1500", "CryptoSignalDigest-2100", "CryptoSignalDigest-0300")
 
-# Delete any existing tasks with these names (idempotent reinstall)
+# Delete any existing tasks with these names (idempotent reinstall).
+# Suppress both stderr and PowerShell's error stream so missing tasks don't abort.
+$ErrorActionPreference = "Continue"
 foreach ($name in $TaskNames) {
-    schtasks /Delete /TN $name /F 2>$null | Out-Null
+    cmd /c "schtasks /Delete /TN $name /F >nul 2>&1"
 }
+$ErrorActionPreference = "Stop"
 
 for ($i = 0; $i -lt $LocalHours.Length; $i++) {
     $hour = $LocalHours[$i]
@@ -108,6 +111,10 @@ for ($i = 0; $i -lt $LocalHours.Length; $i++) {
     $timeStr = "{0:D2}:00" -f $hour
     Write-Host "    Creating task $name at $timeStr local..."
     & schtasks /Create /TN $name /TR "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$RunScript`"" /SC DAILY /ST $timeStr /F | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to create task $name (exit $LASTEXITCODE)"
+        exit 1
+    }
 }
 
 Write-Host ""
