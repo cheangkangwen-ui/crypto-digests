@@ -21,12 +21,15 @@ import csv
 import json
 import os
 import sys
+import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
 import anthropic
+from duckduckgo_search import DDGS
+from fpdf import FPDF
 
 
 # ------- stdout encoding fix -------
@@ -50,6 +53,7 @@ XAI_API_KEY = _clean(os.environ.get("XAI_API_KEY", ""))
 ANTHROPIC_API_KEY = _clean(os.environ.get("ANTHROPIC_API_KEY", ""))
 TELEGRAM_BOT_TOKEN = _clean(os.environ.get("TELEGRAM_BOT_TOKEN", ""))
 TELEGRAM_CHAT_ID = _clean(os.environ.get("TELEGRAM_CHAT_ID", ""))
+TRADE_IDEAS_CHAT_ID = _clean(os.environ.get("TRADE_IDEAS_CHAT_ID", ""))
 
 for name, val in [
     ("XAI_API_KEY", XAI_API_KEY),
@@ -60,11 +64,53 @@ for name, val in [
     if not val:
         sys.exit(f"ERROR: {name} env var missing")
 
+if not TRADE_IDEAS_CHAT_ID:
+    print("WARN: TRADE_IDEAS_CHAT_ID not set — trade ideas PDF will be skipped")
+
 
 # ------- Config -------
 GROK_MODEL = os.environ.get("GROK_MODEL", "grok-4-fast").strip() or "grok-4-fast"
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5").strip() or "claude-sonnet-4-5"
+TRADE_IDEAS_MODEL = os.environ.get("TRADE_IDEAS_MODEL", "claude-opus-4-7").strip() or "claude-opus-4-7"
 TG_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+
+
+# ------- Load analytical frameworks -------
+FRAMEWORKS_DIR = SCRIPT_DIR / "frameworks"
+
+def _load_framework(name: str) -> str:
+    path = FRAMEWORKS_DIR / f"{name}.md"
+    if not path.exists():
+        print(f"WARN: framework file not found: {path}")
+        return ""
+    return path.read_text(encoding="utf-8")
+
+MACRO_FRAMEWORK = _load_framework("macro")
+TRADING_FRAMEWORK = _load_framework("trading")
+
+
+# ------- Web search tool (DuckDuckGo) for trade ideas -------
+SEARCH_TOOL = {
+    "name": "web_search",
+    "description": "Search the web for current crypto prices, technicals, macro data, on-chain metrics, and recent news. Use to ground trade ideas in real-time data.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Search query"
+            }
+        },
+        "required": ["query"]
+    }
+}
+
+def web_search(query: str) -> str:
+    try:
+        results = DDGS().text(query, max_results=6)
+        return json.dumps(results, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 # ------- Time window: last 24h (08:00 SGT yesterday -> now) -------
@@ -376,13 +422,213 @@ def synthesize(verified_posts: list[dict], label: str) -> str:
 
 
 # ============================================================
+# STAGE 2b — Trade ideas (Opus + frameworks + web search)
+# ============================================================
+TRADE_IDEAS_PROMPT = """You are a senior macro-crypto analyst producing actionable trade ideas.
+
+You have two analytical frameworks to apply:
+
+=== MACRO FRAMEWORK ===
+{macro_framework}
+
+=== TRADING FRAMEWORK ===
+{trading_framework}
+
+=== TODAY'S DIGEST ===
+{digest_text}
+
+=== DIGEST SOURCES ===
+{digest_sources}
+
+INSTRUCTIONS:
+
+Apply BOTH frameworks systematically to today's digest. Use the web_search tool to look up current prices, technicals (RSI, moving averages, support/resistance), on-chain data, funding rates, open interest, and any macro data points referenced in the frameworks.
+
+Produce 3-5 actionable trade ideas. For each trade:
+
+TRADE [N]: [Long/Short] $TICKER — [one-line thesis]
+
+MACRO CONTEXT
+Apply the Macro Framework: What regime are we in (inflation vs growth quadrant)? What narratives are driving this? What does positioning/sentiment look like? What are the risks — why would someone sell this to you?
+
+TECHNICAL SETUP
+Apply the Trading Framework: What do longer time-frame S/R and trend lines show? RSI, 14/50/200d MA levels. What caused previous volatility at these levels? What is a similar period in history and what happened?
+
+TRADE PARAMETERS
+- Direction: Long / Short
+- Conviction: 1-10
+- Risk: 1-4% (sized by conviction per the framework)
+- Entry: specific level or range
+- Stop: wide, not at obvious levels (per framework guidance)
+- Targets: T1, T2, T3
+- R:R ratio
+- Timeframe
+
+WHY NOW
+What catalyst drives the narrative shift? What signal grade is this (low/medium/high per the P72 framework)?
+
+WHAT INVALIDATES
+What information would come out against this thesis? At what point would you no longer put on the trade today?
+
+After all trades, include:
+
+PORTFOLIO OVERVIEW
+How do these trades correlate? Are there spreads that hedge systemic risk? What is the aggregate risk exposure? Apply the "check for correlations between existing positions" guidance from the Trading Framework.
+
+TRADFI TRANSLATOR
+Pick 4-8 crypto-native terms from the trade ideas above. For each:
+
+TERM: <name>
+[3-5 sentences: (1) what it is mechanically in crypto, (2) closest TradFi analogy with specific instrument, (3) why it matters specifically to the trades above]
+
+Quality bar example:
+TERM: Funding Rate
+In perpetual futures (crypto's main derivative — contracts with no expiry), longs pay shorts (or vice versa) every 8 hours based on the gap between perp price and spot. Closest TradFi analogy: the overnight repo rate or the carry cost of holding a futures position into delivery — it's the price of leverage. When funding spikes positive, traders are paying steep premiums to stay long, often a contrarian top signal; deeply negative funding can flag capitulation. For Trade [N], the current funding rate of X% signals Y.
+
+---SOURCES---
+Numbered list. Each source: description, full URL from web searches or Telegram channel name from the digest."""
+
+
+def generate_trade_ideas(digest_text: str, digest_sources: str) -> str:
+    if not MACRO_FRAMEWORK or not TRADING_FRAMEWORK:
+        print("  Skipping trade ideas: frameworks not loaded")
+        return ""
+
+    prompt = TRADE_IDEAS_PROMPT.format(
+        macro_framework=MACRO_FRAMEWORK,
+        trading_framework=TRADING_FRAMEWORK,
+        digest_text=digest_text,
+        digest_sources=digest_sources,
+    )
+
+    messages = [{"role": "user", "content": prompt}]
+
+    while True:
+        resp = anthropic_client.messages.create(
+            model=TRADE_IDEAS_MODEL,
+            max_tokens=8000,
+            thinking={"type": "enabled", "budget_tokens": 4000},
+            tools=[SEARCH_TOOL],
+            messages=messages,
+        )
+
+        print(f"  Trade ideas call: stop={resp.stop_reason}, usage=in:{resp.usage.input_tokens} out:{resp.usage.output_tokens}")
+
+        if resp.stop_reason != "tool_use":
+            break
+
+        assistant_content = resp.content
+        serializable = []
+        tool_results = []
+        for block in assistant_content:
+            if block.type == "thinking":
+                serializable.append({"type": "thinking", "thinking": block.thinking, "signature": block.signature})
+            elif block.type == "tool_use":
+                serializable.append({"type": "tool_use", "id": block.id, "name": block.name, "input": block.input})
+                query = block.input.get("query", "")
+                print(f"    web_search: {query}")
+                result = web_search(query)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result,
+                })
+            elif block.type == "text":
+                serializable.append({"type": "text", "text": block.text})
+
+        messages.append({"role": "assistant", "content": serializable})
+        messages.append({"role": "user", "content": tool_results})
+
+    text_parts = [b.text for b in resp.content if b.type == "text"]
+    return "\n".join(text_parts)
+
+
+# ============================================================
+# PDF rendering (fpdf2)
+# ============================================================
+import re as _re
+
+_SECTION_HEADER_RE = _re.compile(
+    r"^(TRADE\s+\d+:|PORTFOLIO OVERVIEW|TRADFI TRANSLATOR|MACRO CONTEXT|"
+    r"TECHNICAL SETUP|TRADE PARAMETERS|WHY NOW|WHAT INVALIDATES|"
+    r"[A-Z][A-Z\s/&]+:)\s*"
+)
+
+
+def _latin1(text: str) -> str:
+    return text.encode("latin-1", "replace").decode("latin-1")
+
+
+def safe_cell(pdf: FPDF, text: str, font: tuple | None = None):
+    if not text or not text.strip():
+        return
+    if font:
+        pdf.set_font(*font)
+    pdf.set_x(pdf.l_margin)
+    clean = _latin1(text.strip())
+    try:
+        pdf.multi_cell(w=pdf.epw, text=clean)
+    except Exception:
+        try:
+            pdf.multi_cell(w=pdf.epw, text=clean[:100] + "...")
+        except Exception:
+            pdf.ln()
+
+
+def render_trade_ideas_pdf(trade_text: str) -> str:
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.cell(w=pdf.epw, text=_latin1("CRYPTO TRADE IDEAS"), new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(4)
+
+    for line in trade_text.split("\n"):
+        stripped = line.strip()
+
+        if not stripped:
+            pdf.ln(2)
+            continue
+
+        if stripped.startswith("---") and len(stripped.replace("-", "").strip()) == 0:
+            y = pdf.get_y()
+            pdf.set_draw_color(180, 180, 180)
+            pdf.line(pdf.l_margin, y, pdf.l_margin + pdf.epw, y)
+            pdf.ln(4)
+            continue
+
+        if stripped.startswith("TRADE ") and ":" in stripped:
+            pdf.ln(4)
+            safe_cell(pdf, stripped, font=("Helvetica", "B", 12))
+            pdf.ln(2)
+            continue
+
+        if _SECTION_HEADER_RE.match(stripped):
+            pdf.ln(2)
+            safe_cell(pdf, stripped, font=("Helvetica", "B", 10))
+            continue
+
+        if stripped.startswith("TERM:"):
+            pdf.ln(2)
+            safe_cell(pdf, stripped, font=("Helvetica", "BI", 10))
+            continue
+
+        safe_cell(pdf, stripped, font=("Helvetica", "", 9))
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    pdf.output(tmp.name)
+    return tmp.name
+
+
+# ============================================================
 # STAGE 3 — Telegram delivery
 # ============================================================
-def tg_send_message(text: str, disable_notification: bool = False) -> dict:
+def tg_send_message(text: str, chat_id: str = "", disable_notification: bool = False) -> dict:
     r = requests.post(
         f"{TG_API}/sendMessage",
         json={
-            "chat_id": TELEGRAM_CHAT_ID,
+            "chat_id": chat_id or TELEGRAM_CHAT_ID,
             "text": text,
             "disable_web_page_preview": True,
             "disable_notification": disable_notification,
@@ -395,10 +641,31 @@ def tg_send_message(text: str, disable_notification: bool = False) -> dict:
     return r.json()
 
 
-def tg_pin_message(message_id: int):
+def tg_send_file(file_path: str, chat_id: str = "", caption: str = "") -> dict:
+    with open(file_path, "rb") as f:
+        r = requests.post(
+            f"{TG_API}/sendDocument",
+            data={
+                "chat_id": chat_id or TELEGRAM_CHAT_ID,
+                "caption": caption,
+            },
+            files={"document": f},
+            timeout=60,
+        )
+    if not r.ok:
+        print(f"TG file send error {r.status_code}: {r.text[:500]}")
+    r.raise_for_status()
+    return r.json()
+
+
+def tg_pin_message(message_id: int, chat_id: str = ""):
     r = requests.post(
         f"{TG_API}/pinChatMessage",
-        json={"chat_id": TELEGRAM_CHAT_ID, "message_id": message_id, "disable_notification": True},
+        json={
+            "chat_id": chat_id or TELEGRAM_CHAT_ID,
+            "message_id": message_id,
+            "disable_notification": True,
+        },
         timeout=30,
     )
     if not r.ok:
@@ -469,7 +736,7 @@ def main():
     digest = synthesize(verified, label)
     print(f"Stage 2 done in {time.time() - t1:.1f}s, digest = {len(digest)} chars\n")
 
-    print("=== Stage 3: Telegram ===")
+    print("=== Stage 3: Telegram (digest) ===")
     if "---SOURCES---" in digest:
         body, sources = digest.split("---SOURCES---", 1)
     else:
@@ -485,7 +752,6 @@ def main():
     if sources.strip():
         tg_send_message("🔗 SOURCES\n" + sources.strip(), disable_notification=True)
 
-    # Verification footer for transparency
     footer = (
         f"✅ {len(verified)} posts verified (HTTP-checked URLs, handle-matched). "
         f"{len(rejected)} candidates rejected."
@@ -495,7 +761,40 @@ def main():
     if first_msg_id:
         tg_pin_message(first_msg_id)
 
-    print(f"\nDone. Pinned message {first_msg_id}.")
+    print(f"  Digest pinned: message {first_msg_id}")
+
+    # ---- Stage 2b: Trade ideas ----
+    if not TRADE_IDEAS_CHAT_ID:
+        print("\n  Skipping trade ideas: TRADE_IDEAS_CHAT_ID not set")
+    else:
+        print("\n=== Stage 2b: Trade Ideas (Opus + frameworks + web search) ===")
+        t2 = time.time()
+        trade_text = generate_trade_ideas(body, sources)
+        print(f"  Stage 2b done in {time.time() - t2:.1f}s, text = {len(trade_text)} chars")
+
+        if trade_text.strip():
+            print("\n=== Stage 3b: Telegram (trade ideas PDF) ===")
+            pdf_path = render_trade_ideas_pdf(trade_text)
+            print(f"  PDF rendered: {pdf_path}")
+
+            try:
+                resp = tg_send_file(
+                    pdf_path,
+                    chat_id=TRADE_IDEAS_CHAT_ID,
+                    caption="📊 Crypto Trade Ideas",
+                )
+                pdf_msg_id = resp["result"]["message_id"]
+                tg_pin_message(pdf_msg_id, chat_id=TRADE_IDEAS_CHAT_ID)
+                print(f"  Trade ideas PDF pinned: message {pdf_msg_id}")
+            finally:
+                try:
+                    os.unlink(pdf_path)
+                except OSError:
+                    pass
+        else:
+            print("  No trade ideas generated — skipping PDF")
+
+    print("\nDone.")
 
 
 if __name__ == "__main__":
