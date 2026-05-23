@@ -563,6 +563,36 @@ You have two analytical frameworks to apply:
 Use this longitudinal context to assess narrative sustainability, identify themes that are gaining/fading momentum, spot whether a trade idea aligns with or contradicts recent positioning, and avoid recommending trades that were already played out. If empty, ignore this section.
 {telegram_history}
 
+=== FUNDING COST DISCIPLINE (MANDATORY for any perp/leveraged trade) ===
+Funding rates are a real, hourly cash cost that scale LINEARLY with time. They are the single most underestimated cost in perp trading and most dangerous on relative-value (RV) pairs and multi-month holds. Internalize the following before proposing any perp trade:
+
+Mechanics:
+- Perps have no expiry. Funding is a peer-to-peer payment (long<->short) that tethers perp price to spot. Exchanges do not take this fee.
+- Perp > spot (longs in demand) -> funding positive -> longs pay shorts.
+- Perp < spot (shorts in demand) -> funding negative -> shorts pay longs.
+- Hyperliquid pays hourly; most CEXes every 8h. It scales linearly with holding period.
+
+Why it eats RV/pair trades:
+- Single directional trade pays/receives funding on one leg. A pair trade hits BOTH legs and the signs rarely cancel cleanly.
+- Crypto perps are structurally long-biased: BTC/ETH funding historically averages ~5-15% annualized positive, alts often higher.
+- Long BTC / Short ETH: pay on long leg, receive on short leg -> usually roughly washes. Acceptable.
+- Long alt-A / Short alt-B: alt-A funding can spike 30-50%+ annualized during catalyst windows (ETF speculation, etc.); thinly traded alt-B can have ERRATIC or NEGATIVE funding (more shorts than longs). When that happens, you pay on BOTH legs simultaneously. This is the 'chew up' scenario.
+- 30% annualized combined funding × 12-week hold = ~7% bleed before the trade moves at all. If your stop is -10%, funding alone can trigger it.
+
+Time scaling:
+- 2-day trade @ 20% annualized funding: ~0.1% cost. Negligible.
+- 6-month trade @ 20% annualized funding: ~10% cost. Dominates R/R math.
+- If targeting +10% to T1 over 1 quarter and paying net 5-10% in funding, gross +10% becomes net 0-5%. Thesis can be right and you barely break even.
+
+MANDATORY checks for any perp trade you propose:
+1. Use web_search to pull 30-day AVERAGE funding for each leg (Coinglass funding history page or Hyperliquid funding history). Do NOT trust spot/snapshot funding — it is noisy.
+2. Estimate total carry cost for your stated holding period: (long_leg_funding_apr - short_leg_funding_apr) × days_held / 365. State this number explicitly in the TRADE PARAMETERS block as 'Est. funding carry: +/-X% over [N] weeks'.
+3. If estimated carry cost is more than ~30% of your target return to T1, flag the trade as STRUCTURALLY COMPROMISED in WHY NOW, and either (a) reduce position size, (b) shorten the timeframe, or (c) propose expressing the view via dated futures (CME, Deribit) instead of perps — fixed cost of carry baked into basis, no surprise funding spikes.
+4. For shorter holds (4-12 weeks), perps are usually fine; instruct the user in WHY NOW to 'monitor funding weekly and exit if funding inverts persistently against the trade'.
+5. Watch for asymmetric funding as ALPHA: if one leg is paying 40%+ annualized to shorts during a crowded long, that itself is a contrarian short signal with a funding TAILWIND. Call this out explicitly when relevant.
+
+This section applies only to perp/leveraged trades. For spot trades, dated futures, or non-crypto equity/index/FX trades, skip the funding analysis (note 'N/A — spot trade' or 'N/A — dated future, carry priced in basis').
+
 INSTRUCTIONS:
 
 Apply BOTH frameworks systematically to today's digest. Use the web_search tool to look up current prices, technicals (RSI, moving averages, support/resistance), {asset_data_hints}, and any macro data points referenced in the frameworks.
@@ -579,6 +609,7 @@ Apply the {secondary_framework_label}: {secondary_application_hint}
 
 TRADE PARAMETERS
 - Direction: Long / Short
+- Instrument: Perp / Spot / Dated future (be explicit — funding only applies to perps)
 - Conviction: 1-10
 - Risk: 1-4% (sized by conviction per the framework)
 - Entry: specific level or range
@@ -586,6 +617,7 @@ TRADE PARAMETERS
 - Targets: T1, T2, T3
 - R:R ratio
 - Timeframe
+- Est. funding carry (perps only): +/-X% over the stated holding period, computed from 30-day avg funding on each leg via web_search. Write 'N/A — spot/dated' if not a perp.
 
 WHY NOW
 What catalyst drives the narrative shift? What signal grade is this (low/medium/high per the P72 framework)?
@@ -624,10 +656,11 @@ TRADE_IDEAS_CATEGORY_CONFIG = {
         "jargon_example": (
             "TERM: Funding Rate\n"
             "In perpetual futures (crypto's main derivative — contracts with no expiry), longs pay shorts "
-            "(or vice versa) every 8 hours based on the gap between perp price and spot. "
+            "(or vice versa) every 1-8 hours based on the gap between perp price and spot. It's a peer-to-peer transfer, not an exchange fee, and it scales LINEARLY with holding period. "
             "Closest TradFi analogy: the overnight repo rate or the carry cost of holding a futures position into delivery — it's the price of leverage. "
-            "When funding spikes positive, traders are paying steep premiums to stay long, often a contrarian top signal; "
-            "deeply negative funding can flag capitulation. For Trade [N], the current funding rate of X% signals Y."
+            "For pair trades you pay/receive on BOTH legs; signs rarely cancel cleanly, so on a multi-month RV pair an annualized 20-30% combined carry can quietly eat the entire target return before the trade moves. "
+            "When funding spikes positive (e.g. 30-50%+ APR during catalyst windows), it's often a crowded-long contrarian top signal; deeply negative funding can flag capitulation or a funding TAILWIND on a contrarian short. "
+            "For Trade [N], the current 30d avg funding rate of X% signals Y, and the est. carry over the stated hold is Z%."
         ),
     },
     "non-crypto": {
