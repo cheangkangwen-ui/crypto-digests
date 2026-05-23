@@ -1,8 +1,7 @@
-.env
-.venv/
 __pycache__/
 *.pyc
-*.session
-x_cookies.json
-.last_run_marker
+.env
+.venv/
 logs/
+.last_run_marker
+x_cookies.json
