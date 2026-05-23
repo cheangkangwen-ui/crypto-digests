@@ -54,6 +54,11 @@ ANTHROPIC_API_KEY = _clean(os.environ.get("ANTHROPIC_API_KEY", ""))
 TELEGRAM_BOT_TOKEN = _clean(os.environ.get("TELEGRAM_BOT_TOKEN", ""))
 TELEGRAM_CHAT_ID = _clean(os.environ.get("TELEGRAM_CHAT_ID", ""))
 
+# Telethon (user-account) for reading existing digest group history
+TELEGRAM_API_ID = _clean(os.environ.get("TELEGRAM_API_ID", ""))
+TELEGRAM_API_HASH = _clean(os.environ.get("TELEGRAM_API_HASH", ""))
+TELEGRAM_SESSION = _clean(os.environ.get("TELEGRAM_SESSION", ""))
+
 for name, val in [
     ("XAI_API_KEY", XAI_API_KEY),
     ("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY),
@@ -84,6 +89,85 @@ def _load_framework(name: str) -> str:
 MACRO_FRAMEWORK = _load_framework("macro")
 TRADING_FRAMEWORK = _load_framework("trading")
 EQUITY_FRAMEWORK = _load_framework("equity")
+
+
+# ------- Telegram history reader (Telethon, user-account API) -------
+# Reads message history from existing digest groups for use as trade-ideas context.
+# Falls back gracefully if Telethon creds are not set.
+
+DIGEST_HISTORY_GROUPS = [
+    "📊 Crypto Signal Digest",  # this pipeline's output
+    "🪙 Crypto Digest",          # ramp-bot output
+]
+DIGEST_HISTORY_DAYS = 30
+DIGEST_HISTORY_MAX_MESSAGES = 200  # per group
+DIGEST_HISTORY_MAX_CHARS = 40000   # truncate per group to keep prompt bounded
+
+
+async def _fetch_group_history_async(group_name: str, days: int, max_messages: int) -> str:
+    from telethon import TelegramClient
+    from telethon.sessions import StringSession
+
+    if not (TELEGRAM_API_ID and TELEGRAM_API_HASH and TELEGRAM_SESSION):
+        return ""
+
+    session = StringSession(TELEGRAM_SESSION) if len(TELEGRAM_SESSION) > 20 else TELEGRAM_SESSION
+    tg = TelegramClient(session, int(TELEGRAM_API_ID), TELEGRAM_API_HASH)
+    try:
+        await tg.connect()
+        if not await tg.is_user_authorized():
+            return f"[{group_name}] Telethon session not authorized"
+
+        # Find the group by name
+        group_entity = None
+        async for dialog in tg.iter_dialogs():
+            if dialog.name == group_name:
+                group_entity = dialog.entity
+                break
+        if group_entity is None:
+            return f"[{group_name}] not found in dialogs"
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        messages = []
+        async for msg in tg.iter_messages(group_entity, limit=max_messages):
+            if msg.date < cutoff:
+                break
+            if msg.text and msg.text.strip():
+                messages.append(f"[{msg.date.strftime('%Y-%m-%d %H:%M')}] {msg.text.strip()}")
+
+        if not messages:
+            return f"[{group_name}] no messages in last {days} days"
+
+        # Reverse so oldest is first (chronological reading order)
+        messages.reverse()
+        body = "\n\n---\n\n".join(messages)
+        if len(body) > DIGEST_HISTORY_MAX_CHARS:
+            body = body[-DIGEST_HISTORY_MAX_CHARS:]  # keep most recent on truncation
+            body = "[... older messages truncated ...]\n\n" + body
+        return f"## {group_name} — last {days} days ({len(messages)} messages)\n\n{body}"
+    finally:
+        await tg.disconnect()
+
+
+def gather_telegram_history() -> str:
+    """Return concatenated history from all DIGEST_HISTORY_GROUPS, or empty string if creds missing."""
+    if not (TELEGRAM_API_ID and TELEGRAM_API_HASH and TELEGRAM_SESSION):
+        print("  Telegram history reader: Telethon creds not set — skipping")
+        return ""
+
+    import asyncio
+    parts = []
+    for group_name in DIGEST_HISTORY_GROUPS:
+        try:
+            result = asyncio.run(_fetch_group_history_async(
+                group_name, DIGEST_HISTORY_DAYS, DIGEST_HISTORY_MAX_MESSAGES
+            ))
+            if result:
+                parts.append(result)
+                print(f"  Telegram history: fetched {len(result)} chars from '{group_name}'")
+        except Exception as e:
+            print(f"  Telegram history: failed to fetch '{group_name}': {e}")
+    return "\n\n=============================\n\n".join(parts)
 
 
 # ------- Web search tool (DuckDuckGo) for trade ideas -------
@@ -471,6 +555,10 @@ You have two analytical frameworks to apply:
 === DIGEST SOURCES ===
 {digest_sources}
 
+=== RECENT DIGEST HISTORY (LAST 30 DAYS) ===
+Use this longitudinal context to assess narrative sustainability, identify themes that are gaining/fading momentum, spot whether a trade idea aligns with or contradicts recent positioning, and avoid recommending trades that were already played out. If empty, ignore this section.
+{telegram_history}
+
 INSTRUCTIONS:
 
 Apply BOTH frameworks systematically to today's digest. Use the web_search tool to look up current prices, technicals (RSI, moving averages, support/resistance), {asset_data_hints}, and any macro data points referenced in the frameworks.
@@ -558,7 +646,7 @@ TRADE_IDEAS_CATEGORY_CONFIG = {
 }
 
 
-def generate_trade_ideas(digest_text: str, digest_sources: str, category: str = "crypto") -> str:
+def generate_trade_ideas(digest_text: str, digest_sources: str, category: str = "crypto", telegram_history: str = "") -> str:
     if not MACRO_FRAMEWORK:
         print("  Skipping trade ideas: macro framework not loaded")
         return ""
@@ -581,6 +669,7 @@ def generate_trade_ideas(digest_text: str, digest_sources: str, category: str = 
         jargon_example=cfg["jargon_example"],
         digest_text=digest_text,
         digest_sources=digest_sources,
+        telegram_history=telegram_history or "(no historical context available)",
     )
 
     messages = [{"role": "user", "content": prompt}]
@@ -818,6 +907,11 @@ def main():
     non_crypto_posts = [p for p in verified if not is_crypto_sublist(p.get("sub_list", ""))]
     print(f"\nBucket split: crypto={len(crypto_posts)}, non-crypto={len(non_crypto_posts)}")
 
+    # Fetch 30-day history from existing digest groups once — reused for both trade idea calls
+    print("\n=== Fetching Telegram digest history (30 days) ===")
+    telegram_history = gather_telegram_history()
+    print(f"  History total: {len(telegram_history)} chars")
+
     pin_first = True  # only pin the very first digest message of the run
 
     for category, bucket in [("crypto", crypto_posts), ("non-crypto", non_crypto_posts)]:
@@ -858,7 +952,7 @@ def main():
         # ---- Stage 2b: Trade ideas PDF for this category ----
         print(f"\n=== Stage 2b [{category}]: Trade Ideas (Opus + frameworks + web search) ===")
         t2 = time.time()
-        trade_text = generate_trade_ideas(body, sources, category=category)
+        trade_text = generate_trade_ideas(body, sources, category=category, telegram_history=telegram_history)
         print(f"  done in {time.time() - t2:.1f}s, text = {len(trade_text)} chars")
 
         if not trade_text.strip():

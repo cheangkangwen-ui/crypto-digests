@@ -5,3 +5,5 @@ __pycache__/
 logs/
 .last_run_marker
 x_cookies.json
+*.session
+gen_session_output.txt
