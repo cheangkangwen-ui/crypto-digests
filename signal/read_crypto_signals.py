@@ -979,7 +979,10 @@ def main():
             time.sleep(0.5)
 
         if sources.strip():
-            tg_send_message(f"🔗 {title_upper} SOURCES\n" + sources.strip(), disable_notification=True)
+            sources_text = f"🔗 {title_upper} SOURCES\n" + sources.strip()
+            for src_chunk in chunk_for_tg(sources_text):
+                tg_send_message(src_chunk, disable_notification=True)
+                time.sleep(0.5)
 
         if pin_first and first_msg_id:
             tg_pin_message(first_msg_id)
