@@ -4,7 +4,6 @@ on:
   schedule:
     - cron: '0 0 * * 1-5'   # 8am SGT weekdays
     - cron: '0 12 * * 1-5'  # 8pm SGT weekdays
-  workflow_dispatch:  # Manual trigger (Cloudflare Worker no longer needed)
 
 jobs:
   digest:
