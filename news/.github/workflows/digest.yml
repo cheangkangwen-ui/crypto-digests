@@ -1,7 +1,10 @@
 name: Crypto News Digest
 
 on:
-  workflow_dispatch:  # Triggered by Cloudflare Worker crypto-digest-scheduler
+  schedule:
+    - cron: '0 0 * * 1-5'   # 8am SGT weekdays
+    - cron: '0 12 * * 1-5'  # 8pm SGT weekdays
+  workflow_dispatch:  # Manual trigger (Cloudflare Worker no longer needed)
 
 jobs:
   digest:
