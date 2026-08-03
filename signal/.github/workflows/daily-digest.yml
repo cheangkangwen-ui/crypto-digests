@@ -1,12 +1,10 @@
 name: Crypto Signal Digest
 
 on:
-  # Schedule disabled — GitHub Actions free-tier private-repo schedules are unreliable
-  # (delays of hours, skipped days). Triggered instead by Perplexity cron c8e64e69 at 00:00 UTC.
-  # schedule:
-  #   - cron: '0 0 * * *'
+  schedule:
+    - cron: '0 0 * * *'  # 8am SGT daily (re-enabled 2026-08-04; Perplexity cron trigger retired)
   workflow_dispatch:
-    # one-click manual trigger from the Actions tab + Perplexity cron API trigger
+    # one-click manual trigger from the Actions tab
 
 jobs:
   run:
