@@ -4,6 +4,7 @@ on:
   schedule:
     - cron: '0 0 * * 1-5'   # 8am SGT weekdays
     - cron: '0 12 * * 1-5'  # 8pm SGT weekdays
+  workflow_dispatch:
 
 jobs:
   digest:
