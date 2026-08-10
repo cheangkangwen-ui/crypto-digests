@@ -12,7 +12,6 @@ from telethon.tl.types import Channel
 from telethon.tl.functions.messages import GetDialogFiltersRequest
 from telethon.tl.functions.channels import CreateChannelRequest
 from datetime import datetime, timezone, timedelta
-from fpdf import FPDF
 
 def _clean(val):
     return val.strip().replace("﻿", "").replace("￾", "")
@@ -22,7 +21,6 @@ TELEGRAM_API_HASH = _clean(os.environ["TELEGRAM_API_HASH"])
 TELEGRAM_SESSION = _clean(os.environ.get("TELEGRAM_SESSION", "crypto_session"))
 ANTHROPIC_API_KEY = _clean(os.environ.get("ANTHROPIC_API_KEY", ""))
 CRYPTO_GROUP_NAME = os.environ.get("CRYPTO_GROUP_NAME", "🪙 Crypto Digest")
-TRADE_IDEAS_GROUP_NAME = os.environ.get("TRADE_IDEAS_GROUP_NAME", "📊 Crypto Trade Ideas")
 FOLDER_NAME = "Crypto"
 
 TG_SEMAPHORE = 30
@@ -55,221 +53,6 @@ def web_search(query: str, max_results: int = 6) -> str:
         )
     except Exception as e:
         return f"Search failed: {e}"
-
-
-from pathlib import Path
-_FRAMEWORKS_DIR = Path(__file__).resolve().parent / "frameworks"
-
-def _load_framework(name: str) -> str:
-    path = _FRAMEWORKS_DIR / f"{name}.md"
-    if not path.exists():
-        print(f"WARN: framework file not found: {path}")
-        return ""
-    return path.read_text(encoding="utf-8")
-
-MACRO_FRAMEWORK = _load_framework("macro")
-TRADING_FRAMEWORK = _load_framework("trading")
-
-
-async def generate_trade_ideas_pdf(ai_client, digest_text, sources_text, label):
-    trade_prompt = f"""You are a crypto trading analyst. Below is today's crypto digest, its sources, and two analytical frameworks (Macro and Trading).
-
-Your job: produce 3-5 ACTIONABLE trade ideas based on the digest news, structured using both frameworks.
-
-{MACRO_FRAMEWORK}
-
-{TRADING_FRAMEWORK}
-
-For each trade idea, use this structure:
-
-TRADE [N]: [Long/Short] $TICKER — [one-line thesis]
-
-MACRO CONTEXT:
-- Current regime and where this asset fits
-- Key macro tailwinds/headwinds
-- Positioning and flow context
-
-TECHNICAL SETUP:
-- Key levels (support, resistance, current price if known)
-- Trend structure and momentum
-- Entry zone and stop loss level
-
-TRADE PARAMETERS:
-- Direction: Long/Short
-- Conviction: [1-10]
-- Suggested risk: [1-4]% of portfolio
-- Entry: [price zone or condition]
-- Stop loss: [level or % from entry]
-- Target(s): [T1, T2 with rationale]
-- Risk/Reward: [ratio]
-- Timeframe: [days/weeks/months]
-
-WHY NOW:
-- What catalyst from today's news makes this actionable?
-- What's the historical playbook?
-
-WHAT INVALIDATES:
-- Specific conditions that kill the thesis
-
----
-
-End with a PORTFOLIO OVERVIEW section:
-- Net positioning bias (long/short/neutral)
-- Correlation check across all ideas
-- Key macro risk to monitor
-
-After the PORTFOLIO OVERVIEW, add a section titled "TRADFI TRANSLATOR". The reader is an experienced macro and equity fundamental investor — they deeply understand yield curves, P/E, DCF, central bank policy, credit spreads, options Greeks, duration, carry trades, flow analysis, 13F filings, etc. They do NOT have crypto background.
-
-For each crypto-specific concept used in the trade ideas above, write a THOROUGH explanation (3-5 sentences) that:
-1. First explains what it is in crypto — how it works mechanically
-2. Then maps it to the closest TradFi analogy so the reader can anchor it
-3. Then explains how it's relevant to the specific trade idea where it appeared
-
-Format each entry as:
-TERM: <name>
-<3-5 sentence explanation with TradFi mapping and relevance to the trade>
-
-Example of the depth expected:
-TERM: Funding Rate
-In crypto perpetual futures (futures that never expire), the funding rate is a periodic payment between longs and shorts that keeps the perp price anchored to spot. When funding is positive, longs pay shorts — meaning the market is net long and willing to pay for leverage. Think of it like the cost of carry on a futures contract, but settled every 8 hours instead of at expiry. As a signal, extreme positive funding is like seeing very high short interest costs in equities — it means crowded positioning and vulnerability to a squeeze or flush. In the trade above, elevated funding suggests the long side is crowded and a pullback entry may be available.
-
-Include 4-8 terms. Only include terms that actually appear in the trade ideas above. Skip terms the reader already knows (BTC, ETH, bull/bear, market cap, long/short).
-
-After the TRADFI TRANSLATOR, output this EXACT line on its own:
----SOURCES---
-
-Then list ALL sources used for each trade idea. For each source:
-- Cite the Telegram channel name from the digest sources below
-- For web searches you performed, include the full URL
-- Format each as a numbered item:
-1. [Topic/Ticker] — Source Name or URL
-2. ...
-
-Use the web_search tool to look up current prices, technicals, or on-chain data for any token you include. Every trade idea MUST have current price context.
-
-TODAY'S DIGEST:
-{digest_text}
-
-DIGEST SOURCES:
-{sources_text}"""
-
-    def _call():
-        messages = [{"role": "user", "content": trade_prompt}]
-        while True:
-            response = ai_client.messages.create(
-                model="claude-opus-4-7",
-                max_tokens=8000,
-                thinking={"type": "adaptive"},
-                tools=[SEARCH_TOOL],
-                messages=messages,
-            )
-            if response.stop_reason != "tool_use":
-                return response
-            tool_results = []
-            for block in response.content:
-                if block.type == "tool_use":
-                    print(f"  [trade ideas search] {block.input['query']}")
-                    result = web_search(block.input["query"])
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result,
-                    })
-            messages.append({"role": "assistant", "content": response.content})
-            messages.append({"role": "user", "content": tool_results})
-
-    print("  Generating actionable trade ideas...")
-    loop = asyncio.get_event_loop()
-    response = await loop.run_in_executor(None, _call)
-
-    trade_text = ""
-    for block in response.content:
-        if block.type == "text":
-            trade_text = block.text.strip()
-
-    if not trade_text:
-        print("  No trade ideas generated.")
-        return None
-
-    for line in trade_text.split("\n"):
-        print(f"  {line}")
-
-    if "---SOURCES---" in trade_text:
-        trade_body, trade_sources = trade_text.split("---SOURCES---", 1)
-        trade_body = trade_body.strip()
-        trade_sources = trade_sources.strip()
-    else:
-        trade_body = trade_text
-        trade_sources = ""
-
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=20)
-    pdf.add_page()
-
-    pdf.set_font("Helvetica", "B", 18)
-    pdf.cell(0, 12, "CRYPTO TRADE IDEAS", new_x="LMARGIN", new_y="NEXT", align="C")
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(0, 8, label, new_x="LMARGIN", new_y="NEXT", align="C")
-    pdf.ln(6)
-
-    def safe_cell(pdf, h, txt, font=None):
-        if font:
-            pdf.set_font(*font)
-        pdf.set_x(pdf.l_margin)
-        if not txt.strip():
-            return
-        try:
-            pdf.multi_cell(w=pdf.epw, h=h, text=txt)
-        except Exception:
-            try:
-                pdf.multi_cell(w=pdf.epw, h=h, text=txt[:100])
-            except Exception:
-                pdf.ln(h)
-
-    pdf.set_font("Helvetica", "", 9)
-    for line in trade_body.split("\n"):
-        clean = line.encode("latin-1", "replace").decode("latin-1")
-        if line.startswith("TRADE ") and ":" in line:
-            pdf.ln(4)
-            safe_cell(pdf, 6, clean, ("Helvetica", "B", 12))
-            pdf.set_font("Helvetica", "", 9)
-        elif line.startswith("PORTFOLIO OVERVIEW") or line.startswith("TRADFI TRANSLATOR"):
-            pdf.ln(4)
-            safe_cell(pdf, 6, clean, ("Helvetica", "B", 12))
-            pdf.set_font("Helvetica", "", 9)
-        elif line.endswith(":") and line.isupper():
-            pdf.ln(2)
-            safe_cell(pdf, 6, clean, ("Helvetica", "B", 10))
-            pdf.set_font("Helvetica", "", 9)
-        elif line.strip() == "---":
-            pdf.ln(3)
-            pdf.set_draw_color(180, 180, 180)
-            pdf.line(pdf.get_x(), pdf.get_y(), pdf.get_x() + pdf.epw, pdf.get_y())
-            pdf.ln(3)
-        elif line.strip():
-            safe_cell(pdf, 5, clean)
-        else:
-            pdf.ln(3)
-
-    if trade_sources:
-        pdf.ln(6)
-        pdf.set_draw_color(180, 180, 180)
-        pdf.line(pdf.get_x(), pdf.get_y(), pdf.get_x() + pdf.epw, pdf.get_y())
-        pdf.ln(4)
-        safe_cell(pdf, 6, "SOURCES", ("Helvetica", "B", 12))
-        pdf.set_font("Helvetica", "", 8)
-        pdf.ln(2)
-        for line in trade_sources.split("\n"):
-            if line.strip():
-                clean = line.encode("latin-1", "replace").decode("latin-1")
-                safe_cell(pdf, 4, clean)
-
-    myt = timezone(timedelta(hours=8))
-    date_str = datetime.now(myt).strftime("%Y-%m-%d")
-    pdf_path = os.path.join(tempfile.gettempdir(), f"crypto_trade_ideas_{date_str}.pdf")
-    pdf.output(pdf_path)
-    print(f"  PDF saved: {pdf_path}")
-    return pdf_path
 
 
 def get_time_window():
@@ -537,24 +320,6 @@ RAW MESSAGES:
             if first_msg:
                 await tg.pin_message(crypto_group, first_msg.id, notify=False)
             print(f"  Sent {len(chunks)} digest message(s)" + (" + 1 sources message." if sources else "."))
-
-            print("\n  --- GENERATING TRADE IDEAS PDF ---\n")
-            pdf_path = await generate_trade_ideas_pdf(ai_client, body, sources, label)
-            if pdf_path:
-                if not tg.is_connected():
-                    await tg.connect()
-                trade_group = await get_or_create_group(tg, TRADE_IDEAS_GROUP_NAME, "Actionable crypto trade ideas")
-                sent_pdf = await tg.send_file(
-                    trade_group,
-                    pdf_path,
-                    caption="📊 Actionable Trade Ideas — see attached PDF",
-                )
-                await tg.pin_message(trade_group, sent_pdf.id, notify=False)
-                print(f"  PDF sent to '{TRADE_IDEAS_GROUP_NAME}' group.")
-                try:
-                    os.remove(pdf_path)
-                except OSError:
-                    pass
 
         print(f"\n{'='*70}")
         print("  Done.")

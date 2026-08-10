@@ -1,4 +1,3 @@
 telethon
 anthropic
 duckduckgo-search
-fpdf2
