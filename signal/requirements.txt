@@ -1,5 +1,2 @@
 anthropic
 requests
-fpdf2
-duckduckgo-search
-telethon
