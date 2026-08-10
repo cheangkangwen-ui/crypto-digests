@@ -353,9 +353,6 @@ A numbered list. For EACH source: handle, 1-line reason cited, and the EXACT url
 
 READER PROFILE: experienced macro/equity fundamental investor (yield curves, P/E, DCF, credit spreads, options Greeks, duration, carry trades, 13F filings) with NO crypto background. When introducing crypto-native jargon in sections 1-4, use a parenthetical TradFi analogy on first mention — e.g. "funding rate (~ overnight repo rate for perpetual futures)". Then expand fully in the JARGON DECODER section.
 
-## 6. TRADE IDEAS
-Specific actionable setups mentioned by handles in this category. Each: $TICKER, direction (long/short), entry/target/stop where mentioned, conviction level, source handle. If no concrete setups: "No concrete setups posted this window" — don't manufacture.
-
 If the raw output is mostly empty or noise, say "Low signal in this window" instead of inventing content. In that case, still produce a JARGON DECODER for 4-5 broadly important terms readers should know."""
 
 
