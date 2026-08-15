@@ -469,8 +469,21 @@ def chunk_for_tg(text: str, max_chars: int = 4000) -> list[str]:
     chunks: list[str] = []
     cur = ""
     for line in text.splitlines(keepends=True):
-        if len(cur) + len(line) > max_chars:
+        # Hard-split any single line longer than max_chars (Telegram caps
+        # messages at 4096 chars; an oversized line previously produced an
+        # oversized chunk -> 400 "message is too long").
+        while len(line) > max_chars:
+            space = max_chars - len(cur)
+            if space > 200:
+                cur += line[:space]
+                line = line[space:]
             chunks.append(cur)
+            cur = ""
+            if len(line) <= max_chars:
+                break
+        if len(cur) + len(line) > max_chars:
+            if cur:
+                chunks.append(cur)
             cur = line
         else:
             cur += line
