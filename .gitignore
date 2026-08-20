@@ -1,0 +1,9 @@
+*.pyc
+*.session
+.env
+.last_run_marker
+.venv/
+__pycache__/
+gen_session_output.txt
+logs/
+x_cookies.json
