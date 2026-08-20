@@ -312,24 +312,28 @@ CRITICAL ANTI-HALLUCINATION RULES:
 - If you quote a post, the quote must be a literal substring of that post's "text" field.
 - If verified posts are too few or off-topic, write "Low signal in this window — only N verified posts retrieved" and produce a thin digest with only what's supported.
 
+HARD LENGTH BUDGET (high-signal, no fluff):
+- Sections 1-4 combined MUST be under 3,000 characters. Every bullet is ONE line. No preamble, no filler, no restating the obvious.
+- The JARGON DECODER keeps its full depth (4-8 terms, 3-5 sentence paragraphs) — never trim it.
+- Total output before ---SOURCES--- MUST be under 7,500 characters so the body fits in 2 Telegram messages. If over budget, cut section 1-4 content — never the decoder.
+- The SOURCES section has NO length limit.
+
 Synthesize into this EXACT structure. Be concrete, cite handles, no fluff.
 
 {header_emoji} {category_title_upper} SIGNAL DIGEST — {label}
 
 ## 1. TOP STORIES
-The 3-5 most-discussed narratives across all sub-lists. Each:
-- **One-line headline**
-- 1-2 sentence why-it-matters
-- Cite handles (@x, @y, @z)
+The 3-5 most-discussed narratives across all sub-lists. Each is a SINGLE line:
+- **Headline** — one sentence why-it-matters that names the DRIVER of the move (catalyst, flows, narrative, or event) (@x, @y)
 
 ## 2. MARKET SNAPSHOT
-{market_snapshot_guidance}
+{market_snapshot_guidance} Max 3 lines total. Every move mentioned must be attributed to its driver — never report a price move without stating what's causing it.
 
 ## 3. NARRATIVE SUSTAINABILITY
-Which themes are gaining traction (multi-handle convergence) vs fading (declining mentions, contradicting calls). Brief.
+Exactly two lines: `Gaining: <themes with multi-handle convergence>` and `Fading: <themes with declining mentions or contradicting calls>`.
 
 ## 4. BY SUB-LIST
-For EACH sub_list that appears in the verified posts JSON below, write a bolded label followed by 1-2 most important signals from handles in that sub_list. Discover the sub_lists dynamically from the data — do NOT assume a fixed set. Skip any sub_list with zero verified posts (don't list it at all). Format: `- **<sub_list_name>:** <signals>`
+For EACH sub_list that appears in the verified posts JSON below, write a bolded label followed by the SINGLE most important signal from handles in that sub_list, one line only. Discover the sub_lists dynamically from the data — do NOT assume a fixed set. Skip any sub_list with zero verified posts (don't list it at all). Format: `- **<sub_list_name>:** <signals>`
 
 ## 5. 📖 JARGON DECODER
 Pick 4-8 crypto-native terms that appeared in sections 1-5 above (e.g. funding rate, basis trade, LST, LRT, restaking, MEV, perp, AMM, TVL, OI, bridge exploit, ve-tokenomics, depeg, liquidation cascade, points farming, FDV vs market cap, sequencer, rollup, blob fees, ETF flows, basis spread). SKIP basics already-known: BTC, ETH, bull/bear, market cap, wallet, stablecoin.
