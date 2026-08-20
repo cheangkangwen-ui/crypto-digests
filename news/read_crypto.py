@@ -188,7 +188,11 @@ async def main():
 
 For each significant story, use the web_search tool to look up the token, protocol, or context if you are unsure about what it is or why it matters. Only search where context would meaningfully improve the explanation.
 
-IMPORTANT: The digest section (stories + summary) should be concise — aim for under 3500 characters. But the Jargon Decoder section can be as long as needed to properly educate.
+HARD LENGTH BUDGET (high-signal, no fluff):
+- The digest section (stories + summary) MUST be under 2,500 characters. Every line must earn its place — no filler.
+- The Jargon Decoder keeps its full depth (4-8 terms, 3-5 sentence explanations) — never trim it.
+- Total output before ---SOURCES--- MUST be under 7,500 characters so the body fits in 2 Telegram messages. If over budget, cut stories — never the decoder.
+- The SOURCES section has NO length limit.
 
 Produce a digest in this exact format:
 
@@ -196,12 +200,11 @@ Produce a digest in this exact format:
 
 Group stories by category. For each token/story, use this COMPACT format:
 $<TICKER> — <one-line news headline>
-↳ Why it matters: <1-2 sentences, plain English, no jargon without explanation>
-↳ Sentiment: Bullish/Bearish/Neutral
+↳ Why it matters: <ONE sentence, plain English, that states WHAT IS DRIVING the move — the catalyst, flow, or event behind it> | Sentiment: Bullish/Bearish/Neutral
 
 Categories (skip any with no stories): Layer 1s/Layer 2s | DeFi/DEXs | Memecoins/NFTs | Regulation/Policy | Market/Macro
 
-SUMMARY: 2-3 sentences on key themes across all categories, written for a layman.
+SUMMARY: 2 sentences max on key themes across all categories, written for a layman.
 
 JARGON DECODER:
 After the summary, add a section titled "📖 JARGON DECODER". The reader is an experienced macro and equity fundamental investor — they deeply understand yield curves, P/E, DCF, central bank policy, credit spreads, options Greeks, duration, carry trades, flow analysis, 13F filings, etc. They do NOT have crypto background.
@@ -229,9 +232,9 @@ Rules:
 - Skip channels with no crypto-relevant content
 - Layer 1s/Layer 2s always comes first
 - Omit sections with no relevant stories — do not write "[No significant stories]"
-- Maximum 10-12 entries total — prioritise the most impactful
+- Maximum 6-8 entries total — only the most impactful; drop marginal stories entirely
 - Use $ prefix for tickers (e.g. $BTC, $ETH, $SOL)
-- Include price moves when mentioned in the source messages
+- Include price moves when mentioned in the source messages, and ALWAYS attribute each move to its driver (catalyst, flows, narrative, event) — never report a move without its cause
 
 After the digest (including the jargon decoder), output this EXACT line on its own:
 ---SOURCES---
