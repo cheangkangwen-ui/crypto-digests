@@ -571,12 +571,8 @@ def main():
             print(f"  Pinned digest message {first_msg_id}")
             pin_first = False
 
-    # Final verification footer (once per run)
-    footer = (
-        f"✅ {len(verified)} posts verified (HTTP-checked URLs, handle-matched). "
-        f"{len(rejected)} candidates rejected."
-    )
-    tg_send_message(footer, disable_notification=True)
+    # Verification stats logged only (no Telegram footer)
+    print(f"Verified {len(verified)} / rejected {len(rejected)} candidates.")
 
     print("\nDone.")
 
