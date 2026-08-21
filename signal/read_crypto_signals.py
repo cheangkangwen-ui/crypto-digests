@@ -336,7 +336,7 @@ One line: the most important upcoming catalyst, level, or event cited by handles
 
 End with:
 ---SOURCES---
-A numbered list. For EACH source: handle, 1-line reason cited, and the EXACT url from the verified posts array. Only include sources you actually drew from above. Do not add commentary URLs.
+A numbered list with EXACTLY ONE entry per handle — never list the same handle twice. Format: handle, 1-line reason cited, and the EXACT url of that handle's single most substantive post (copied verbatim from the verified posts array). If a handle pushed the same idea across multiple posts/threads, still ONE entry: pick the best URL and append "(+N similar posts)". Only include handles you actually drew from above. Do not add commentary URLs.
 
 READER PROFILE: experienced macro/equity fundamental investor (yield curves, P/E, DCF, credit spreads, options Greeks, duration, carry trades, 13F filings) with NO crypto background. When using crypto-native jargon, add a brief parenthetical TradFi analogy on first mention — e.g. "funding rate (~ overnight repo rate for perps)".
 
