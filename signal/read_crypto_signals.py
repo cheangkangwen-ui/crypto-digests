@@ -312,75 +312,67 @@ CRITICAL ANTI-HALLUCINATION RULES:
 - If you quote a post, the quote must be a literal substring of that post's "text" field.
 - If verified posts are too few or off-topic, write "Low signal in this window — only N verified posts retrieved" and produce a thin digest with only what's supported.
 
-HARD LENGTH BUDGET (high-signal, no fluff):
-- Sections 1-4 combined MUST be under 3,000 characters. Every bullet is ONE line. No preamble, no filler, no restating the obvious.
-- The JARGON DECODER keeps its full depth (4-8 terms, 3-5 sentence paragraphs) — never trim it.
-- Total output before ---SOURCES--- MUST be under 7,500 characters so the body fits in 2 Telegram messages. If over budget, cut section 1-4 content — never the decoder.
+HARD FORMAT RULES (high-signal, no fluff):
+- The ENTIRE output before ---SOURCES--- MUST be under 3,400 characters — it is sent as ONE Telegram message. Never exceed this.
+- Every point MUST carry clear evidence: a specific number, level, quote fragment (literal substring of a post), or named event — plus the handles behind it. No vibes, no generic commentary.
+- Attribute every move or claim to its DRIVER (catalyst, flows, positioning, event) — never report a move without its cause.
+- No preamble, no filler, no restating the obvious. If a bullet doesn't teach the reader something concrete, cut it.
 - The SOURCES section has NO length limit.
 
-Synthesize into this EXACT structure. Be concrete, cite handles, no fluff.
+Synthesize into this EXACT structure:
 
-{header_emoji} {category_title_upper} SIGNAL DIGEST — {label}
+{header_emoji} {category_title_upper} SIGNAL — {label}
 
-## 1. TOP STORIES
-The 3-5 most-discussed narratives across all sub-lists. Each is a SINGLE line:
-- **Headline** — one sentence why-it-matters that names the DRIVER of the move (catalyst, flows, narrative, or event) (@x, @y)
+## 🤝 COMMON GROUND
+3-5 themes where MULTIPLE handles independently converge. One single-line bullet each:
+- **Theme** — the shared point + the strongest concrete evidence (levels, data, short quote) (@x, @y, @z)
 
-## 2. MARKET SNAPSHOT
-{market_snapshot_guidance} Max 3 lines total. Every move mentioned must be attributed to its driver — never report a price move without stating what's causing it.
+## 💡 BEST IDEAS
+1-3 standout differentiated ideas — non-consensus, clearly argued, well-evidenced. One single-line bullet each:
+- **Idea** (@handle) — the thesis + the specific evidence or reasoning given
 
-## 3. NARRATIVE SUSTAINABILITY
-Exactly two lines: `Gaining: <themes with multi-handle convergence>` and `Fading: <themes with declining mentions or contradicting calls>`.
-
-## 4. BY SUB-LIST
-For EACH sub_list that appears in the verified posts JSON below, write a bolded label followed by the SINGLE most important signal from handles in that sub_list, one line only. Discover the sub_lists dynamically from the data — do NOT assume a fixed set. Skip any sub_list with zero verified posts (don't list it at all). Format: `- **<sub_list_name>:** <signals>`
-
-## 5. 📖 JARGON DECODER
-Pick 4-8 crypto-native terms that appeared in sections 1-5 above (e.g. funding rate, basis trade, LST, LRT, restaking, MEV, perp, AMM, TVL, OI, bridge exploit, ve-tokenomics, depeg, liquidation cascade, points farming, FDV vs market cap, sequencer, rollup, blob fees, ETF flows, basis spread). SKIP basics already-known: BTC, ETH, bull/bear, market cap, wallet, stablecoin.
-
-For each term, write a 3-5 sentence paragraph using this format:
-
-📌 <TERM>
-[Mechanical definition in crypto context] [Closest TradFi analogy with specific instrument] [Why it matters to you as an investor — what signal it gives or what risk it represents]
-
-QUALITY BAR — examples of the depth expected:
-
-📌 FUNDING RATE
-In perpetual futures (crypto's main derivative — contracts with no expiry), longs pay shorts (or vice versa) every 8 hours based on the gap between perp price and spot. Closest TradFi analogy: the overnight repo rate or the carry cost of holding a futures position into delivery — it's the price of leverage. When funding spikes positive, traders are paying steep premiums to stay long, often a contrarian top signal; deeply negative funding can flag capitulation. As an investor, persistent +0.05%/8h funding (~55% annualized) on BTC means leveraged crowd is offsides — watch for forced unwinds.
-
-📌 BRIDGE EXPLOIT
-Cross-chain bridges hold pooled collateral (e.g. ETH locked on Ethereum, wrapped ETH minted on Solana). Exploits drain the locked side — the wrapped tokens on the other chain become unbacked claims. Closest TradFi analogy: a custodial bank run where the custodian's vault is empty but depository receipts still circulate. Historically $2.5B+ stolen this way (Ronin, Wormhole, Nomad). For an investor, bridge TVL is a hidden tail risk in any L2/L1 thesis — a $500M bridge hack can crater the receiving chain's native token 30% in hours regardless of fundamentals.
+## 👀 WATCH
+One line: the most important upcoming catalyst, level, or event cited by handles.
 
 End with:
 ---SOURCES---
 A numbered list. For EACH source: handle, 1-line reason cited, and the EXACT url from the verified posts array. Only include sources you actually drew from above. Do not add commentary URLs.
 
-READER PROFILE: experienced macro/equity fundamental investor (yield curves, P/E, DCF, credit spreads, options Greeks, duration, carry trades, 13F filings) with NO crypto background. When introducing crypto-native jargon in sections 1-4, use a parenthetical TradFi analogy on first mention — e.g. "funding rate (~ overnight repo rate for perpetual futures)". Then expand fully in the JARGON DECODER section.
+READER PROFILE: experienced macro/equity fundamental investor (yield curves, P/E, DCF, credit spreads, options Greeks, duration, carry trades, 13F filings) with NO crypto background. When using crypto-native jargon, add a brief parenthetical TradFi analogy on first mention — e.g. "funding rate (~ overnight repo rate for perps)".
 
-If the raw output is mostly empty or noise, say "Low signal in this window" instead of inventing content. In that case, still produce a JARGON DECODER for 4-5 broadly important terms readers should know."""
+If the raw output is mostly empty or noise, say "Low signal in this window" instead of inventing content."""
 
 
 # Crypto-themed keywords for auto-classifying sub_lists
 CRYPTO_KEYWORDS = ("crypto", "defi", "trading", "infra", "builder", "chain", "l1", "l2", "eth", "btc", "sol", "nft", "web3", "dex", "perp")
 
-def is_crypto_sublist(sub_list: str) -> bool:
+def categorize_sublist(sub_list: str) -> str:
+    """Map a sub_list label to one of the three digest categories."""
     s = sub_list.lower()
-    return any(k in s for k in CRYPTO_KEYWORDS)
+    if any(k in s for k in CRYPTO_KEYWORDS):
+        return "crypto"
+    if "equity" in s:
+        return "equity"
+    return "macro"
 
 CATEGORY_CONFIG = {
+    "equity": {
+        "title": "Equity",
+        "title_upper": "EQUITY",
+        "emoji": "📊",
+        "desc": "Single stocks, sectors, earnings, valuation and positioning from equity-focused handles",
+    },
+    "macro": {
+        "title": "Macro",
+        "title_upper": "MACRO",
+        "emoji": "📈",
+        "desc": "TradFi macro: rates, FX, commodities, central banks, credit, geopolitics",
+    },
     "crypto": {
         "title": "Crypto",
         "title_upper": "CRYPTO",
         "emoji": "🪙",
         "desc": "DeFi, on-chain trading, infrastructure, L1/L2s",
-        "market_snapshot": "BTC / ETH / notable alts: price action observations from handles + dominant sentiment lean. Pull specific levels mentioned.",
-    },
-    "non-crypto": {
-        "title": "Macro & Markets",
-        "title_upper": "MACRO & MARKETS",
-        "emoji": "📈",
-        "desc": "TradFi macro, equities, rates, commodities, geopolitics",
-        "market_snapshot": "Key macro signals: equity indices, rates, DXY, commodities, credit. Pull specific levels and Fed/central bank commentary from handles.",
     },
 }
 
@@ -404,7 +396,6 @@ def synthesize(verified_posts: list[dict], label: str, category: str = "crypto")
         category_title_upper=cfg["title_upper"],
         category_desc=cfg["desc"],
         header_emoji=cfg["emoji"],
-        market_snapshot_guidance=cfg["market_snapshot"],
     )
     msg = anthropic_client.messages.create(
         model=CLAUDE_MODEL,
@@ -539,14 +530,15 @@ def main():
         print("Aborting: nothing verified. Health alert sent.")
         return
 
-    # Split verified posts into crypto / non-crypto buckets
-    crypto_posts = [p for p in verified if is_crypto_sublist(p.get("sub_list", ""))]
-    non_crypto_posts = [p for p in verified if not is_crypto_sublist(p.get("sub_list", ""))]
-    print(f"\nBucket split: crypto={len(crypto_posts)}, non-crypto={len(non_crypto_posts)}")
+    # Split verified posts into equity / macro / crypto buckets
+    buckets: dict[str, list] = {"equity": [], "macro": [], "crypto": []}
+    for p in verified:
+        buckets[categorize_sublist(p.get("sub_list", ""))].append(p)
+    print("\nBucket split: " + ", ".join(f"{k}={len(v)}" for k, v in buckets.items()))
 
     pin_first = True  # only pin the very first digest message of the run
 
-    for category, bucket in [("crypto", crypto_posts), ("non-crypto", non_crypto_posts)]:
+    for category, bucket in buckets.items():
         if not bucket:
             print(f"\n--- Skipping {category}: 0 verified posts in bucket ---")
             continue
