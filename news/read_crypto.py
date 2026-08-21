@@ -321,7 +321,15 @@ RAW MESSAGES:
                 await tg.send_message(crypto_group, sources_msg)
 
             if first_msg:
-                await tg.pin_message(crypto_group, first_msg.id, notify=False)
+                try:
+                    await tg.unpin_message(crypto_group)  # clear stale pins so the banner always shows the latest digest
+                except Exception as e:
+                    print(f"  WARN: unpin failed: {e}")
+                try:
+                    await tg.pin_message(crypto_group, first_msg.id, notify=False)
+                    print(f"  Pinned digest message {first_msg.id}")
+                except Exception as e:
+                    print(f"  WARN: pin failed: {e}")
             print(f"  Sent {len(chunks)} digest message(s)" + (" + 1 sources message." if sources else "."))
 
         print(f"\n{'='*70}")
