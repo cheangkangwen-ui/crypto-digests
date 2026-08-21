@@ -307,17 +307,16 @@ VERIFIED POSTS (JSON array, each post has handle/sub_list/timestamp/text/url —
 
 CRITICAL ANTI-HALLUCINATION RULES:
 - You may ONLY cite handles and quote text that appear in the verified posts array above.
-- Every URL you write in the SOURCES section MUST be copied verbatim from a post's "url" field above. Do not modify, shorten, or invent URLs.
+- Do NOT include any URLs in the output. Handles cited inline (@handle) are the attribution.
 - If a topic is not represented in the verified posts, you may NOT include it.
 - If you quote a post, the quote must be a literal substring of that post's "text" field.
 - If verified posts are too few or off-topic, write "Low signal in this window — only N verified posts retrieved" and produce a thin digest with only what's supported.
 
 HARD FORMAT RULES (high-signal, no fluff):
-- The ENTIRE output before ---SOURCES--- MUST be under 3,400 characters — it is sent as ONE Telegram message. Never exceed this.
+- The ENTIRE output MUST be under 3,400 characters — it is sent as ONE Telegram message. Never exceed this.
 - Every point MUST carry clear evidence: a specific number, level, quote fragment (literal substring of a post), or named event — plus the handles behind it. No vibes, no generic commentary.
 - Attribute every move or claim to its DRIVER (catalyst, flows, positioning, event) — never report a move without its cause.
 - No preamble, no filler, no restating the obvious. If a bullet doesn't teach the reader something concrete, cut it.
-- The SOURCES section has NO length limit.
 
 Synthesize into this EXACT structure:
 
@@ -334,9 +333,7 @@ Synthesize into this EXACT structure:
 ## 👀 WATCH
 One line: the most important upcoming catalyst, level, or event cited by handles.
 
-End with:
----SOURCES---
-A numbered list with EXACTLY ONE entry per handle — never list the same handle twice. Format: handle, 1-line reason cited, and the EXACT url of that handle's single most substantive post (copied verbatim from the verified posts array). If a handle pushed the same idea across multiple posts/threads, still ONE entry: pick the best URL and append "(+N similar posts)". Only include handles you actually drew from above. Do not add commentary URLs.
+Do NOT append a sources or links section — the inline @handle attributions are the sourcing. Cite each handle at most once per bullet, and if a handle pushed the same idea across multiple posts/threads, treat it as ONE data point (it is not extra convergence).
 
 READER PROFILE: experienced macro/equity fundamental investor (yield curves, P/E, DCF, credit spreads, options Greeks, duration, carry trades, 13F filings) with NO crypto background. When using crypto-native jargon, add a brief parenthetical TradFi analogy on first mention — e.g. "funding rate (~ overnight repo rate for perps)".
 
@@ -566,10 +563,8 @@ def main():
             time.sleep(0.5)
 
         if sources.strip():
-            sources_text = f"🔗 {title_upper} SOURCES\n" + sources.strip()
-            for src_chunk in chunk_for_tg(sources_text):
-                tg_send_message(src_chunk, disable_notification=True)
-                time.sleep(0.5)
+            # Sources are no longer sent — inline @handle attribution only.
+            print(f"  (discarded {len(sources.strip())} chars of stray sources output)")
 
         if pin_first and first_msg_id:
             tg_pin_message(first_msg_id)
